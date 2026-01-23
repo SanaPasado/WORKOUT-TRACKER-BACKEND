@@ -24,43 +24,48 @@ def getRoutes(request):
     return JsonResponse(routes, safe=False)
 
 
-@api_view(['POST'])
-def register(request):
-    email = request.data.get('email')
-    password = request.data.get('password')
+# @api_view(['POST'])
+# def register(request):
+#     email = request.data.get('email')
+#     password = request.data.get('password')
     
-    if not email or not password:
-        return Response({'error': 'Email and password are required'}, status=400)
+#     if not email or not password:
+#         return Response({'error': 'Email and password are required'}, status=400)
     
-    if User.objects.filter(email=email).exists():
-        return Response({'error': 'Email already exists'}, status=400)
+#     if User.objects.filter(email=email).exists():
+#         return Response({'error': 'Email already exists'}, status=400)
     
-    user = User.objects.create_user(username=email, email=email, password=password)
+#     user = User.objects.create_user(username=email, email=email, password=password)
     
-    # Generate JWT tokens for the new user
-    refresh = RefreshToken.for_user(user)
+#     # Generate JWT tokens for the new user
+#     refresh = RefreshToken.for_user(user)
     
-    return Response({
-        'refresh': str(refresh),
-        'access': str(refresh.access_token),
-        'user': {
-            'id': user.id,
-            'email': user.email
-        }
-    }, status=201)
+#     return Response({
+#         'refresh': str(refresh),
+#         'access': str(refresh.access_token),
+#         'user': {
+#             'id': user.id,
+#             'email': user.email
+#         }
+#     }, status=201)
 
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView
 
+from django.contrib.auth.models import User
+from rest_framework import serializers
+from django.contrib.auth.hashers import make_password
 
-
-@api_view(['GET'])
+@api_view(['POST'])
 @permission_classes([IsAuthenticated])
-def getUserProfile(request):
-    user = request.user
-    serializer = UserSerializer(user, many=False)
-    return Response(serializer.data)
+def register_user(request):
+    print(request.data['username'])
+    username_field = request.data['username']
+    password_field = request.data['password']
+    email_field = request.data['email'] 
 
+    User.objects.create_user(username=username_field, password=make_password(password_field), email=email_field)
+    return Response ({'detail', request.data})
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         data = super().validate(attrs)
