@@ -1,12 +1,11 @@
 from django.shortcuts import render
 from django.http import JsonResponse
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
 from django.contrib.auth.models import User
-from rest_framework.authtoken.models import Token
-from django.contrib.auth import authenticate
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework import serializers
 
 @api_view(['GET'])
 
@@ -22,7 +21,7 @@ def getRoutes(request):
         
 
     ]
-    return JsonResponse('Hello', safe=False)
+    return JsonResponse(routes, safe=False)
 
 
 @api_view(['POST'])
@@ -30,22 +29,86 @@ def register(request):
     email = request.data.get('email')
     password = request.data.get('password')
     
+    if not email or not password:
+        return Response({'error': 'Email and password are required'}, status=400)
+    
     if User.objects.filter(email=email).exists():
-        return Response({'email': 'Email already exists'}, status=400)
+        return Response({'error': 'Email already exists'}, status=400)
     
     user = User.objects.create_user(username=email, email=email, password=password)
-    token, _ = Token.objects.get_or_create(user=user)
     
-    return Response({'token': token.key, 'user': {'email': user.email}})
+    # Generate JWT tokens for the new user
+    refresh = RefreshToken.for_user(user)
+    
+    return Response({
+        'refresh': str(refresh),
+        'access': str(refresh.access_token),
+        'user': {
+            'id': user.id,
+            'email': user.email
+        }
+    }, status=201)
 
-@api_view(['POST'])
-def login_user(request):
-    email = request.data.get('email')
-    password = request.data.get('password')
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.views import TokenObtainPairView
+
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def getUserProfile(request):
+    user = request.user
+    serializer = UserSerializer(user, many=False)
+    return Response(serializer.data)
+
+class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
+    def validate(self, attrs):
+        data = super().validate(attrs)
+        
+        serializer = UserSerializer(self.user).data 
+       
+        for k, v in serializer.items():
+            data[k] = v
+        
+        return data
     
-    user = User.objects.filter(email=email).first()
-    if user and user.check_password(password):
-        token, _ = Token.objects.get_or_create(user=user)
-        return Response({'token': token.key, 'user': {'email': user.email}})
+class MyTokenObtainPairView(TokenObtainPairView):
+    serializer_class = MyTokenObtainPairSerializer
+   
+def getUserProfile(request):
+    user = request.user
+    serializer = UserSerializer(user, many = False)
+    return Response(serializer.data)
+
+class UserSerializer(serializers.ModelSerializer):
+    name = serializers.SerializerMethodField(read_only=True)
+    _id = serializers.SerializerMethodField(read_only=True)
+    isAdmin = serializers.SerializerMethodField(read_only=True)
     
-    return Response({'error': 'Invalid credentials'}, status=401)
+    class Meta:
+        model = User
+        fields = ['id', '_id', 'name', 'username', 'email', 'isAdmin']
+    
+    def get__id(self, obj):
+        return obj.id
+    
+    def get_isAdmin(self, obj):
+        return obj.is_staff
+    
+    def get_name(self, obj):
+        name = obj.first_name
+        if name == '':
+            name = obj.email
+        return name
+
+class UserSerializerWithToken(UserSerializer):
+    token = serializers.SerializerMethodField(read_only=True)
+    
+    class Meta:
+        model = User
+        fields = ['id', '_id', 'username', 'email', 'name', 'isAdmin', 'token']
+    
+    def get_token(self, obj):
+        token = RefreshToken.for_user(obj)
+        return str(token.access_token)
+
