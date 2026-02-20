@@ -10,4 +10,5 @@ urlpatterns = [
     path('auth/register/', views.register_user, name='register'),
     path('users/login/', views.MyTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('users.user/profile/', views.getUserProfile, name='user-profile'),
-]
+    path('exercises', views.ExerciseListView, name = "exercise=list")
+]   

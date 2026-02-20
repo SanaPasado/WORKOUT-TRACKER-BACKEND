@@ -24,30 +24,6 @@ def getRoutes(request):
     return JsonResponse(routes, safe=False)
 
 
-# @api_view(['POST'])
-# def register(request):
-#     email = request.data.get('email')
-#     password = request.data.get('password')
-    
-#     if not email or not password:
-#         return Response({'error': 'Email and password are required'}, status=400)
-    
-#     if User.objects.filter(email=email).exists():
-#         return Response({'error': 'Email already exists'}, status=400)
-    
-#     user = User.objects.create_user(username=email, email=email, password=password)
-    
-#     # Generate JWT tokens for the new user
-#     refresh = RefreshToken.for_user(user)
-    
-#     return Response({
-#         'refresh': str(refresh),
-#         'access': str(refresh.access_token),
-#         'user': {
-#             'id': user.id,
-#             'email': user.email
-#         }
-#     }, status=201)
 
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView
@@ -55,6 +31,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from django.contrib.auth.models import User
 from rest_framework import serializers
 from django.contrib.auth.hashers import make_password
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -79,7 +56,10 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     
 class MyTokenObtainPairView(TokenObtainPairView):
     serializer_class = MyTokenObtainPairSerializer
-   
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def getUserProfile(request):
     user = request.user
     serializer = UserSerializer(user, many = False)
@@ -117,3 +97,22 @@ class UserSerializerWithToken(UserSerializer):
         token = RefreshToken.for_user(obj)
         return str(token.access_token)
 
+from serializers import ExerciseSerializer
+from rest_framework.generics import ListAPIView
+from models import Exercise
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def exercise_list(request):
+    qs = Exercise.objects.all()
+
+    q = request.query_params.get("q")
+    if q:
+        qs = qs.filter(name__icontains=q)  # replace "name" if your field is different
+
+    category = request.query_params.get("category")
+    if category:
+        qs = qs.filter(category__name__icontains=category).distinct()  # adjust to your model relation
+
+    serializer = ExerciseSerializer(qs, many=True)
+    return Response(serializer.data)
