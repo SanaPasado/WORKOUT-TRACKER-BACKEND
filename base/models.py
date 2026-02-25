@@ -54,6 +54,7 @@ class Exercise(models.Model):
     category = models.CharField(max_length=20, choices=ExerciseCategory.choices)
     difficulty = models.CharField(max_length=20, choices=Difficulty.choices)
     muscle_group = models.CharField(max_length=120)
+    tutorial_url = models.URLField(blank=True, null=True)
     is_premium = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)  # optional
     created_at = models.DateTimeField(auto_now_add=True)

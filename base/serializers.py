@@ -17,4 +17,4 @@ class UserProfileSerializer(serializers.ModelSerializer):
 class ExerciseSerializer(serializers.ModelSerializer):
     class Meta:
         model = Exercise
-        fields = ["id", "name", "category", "difficulty", "muscle_group", "is_premium"] 
+        fields = ["id", "name", "category", "difficulty", "muscle_group", "tutorial_url", "is_premium"] 
