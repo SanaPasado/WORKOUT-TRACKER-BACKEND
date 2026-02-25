@@ -1,4 +1,7 @@
 from django.db import models
+from django.conf import settings
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 
 class FitnessGoal(models.TextChoices):
     BUILD_MUSCLE = "BUILD_MUSCLE", "Build Muscle"
@@ -13,20 +16,17 @@ class FitnessLevel(models.TextChoices):
     ADVANCED = "ADVANCED", "Advanced"
     EXPERT = "EXPERT", "Expert"
 
-class User(models.Model):
-    user_name = models.CharField(max_length=30)
-    email = models.EmailField(max_length = 30)
-    password  = models.CharField(max_length=30)
 
 class UserProfile(models.Model):
-    age = models.PositiveIntegerField
-    user_profile = models.OneToOneField(User, on_delete=models.CASCADE, primary_key=True)
-    height = models.DecimalField()
-    weight = models.DecimalField()
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="profile")
+    age = models.PositiveIntegerField(null=True, blank=True)
     height_cm = models.PositiveSmallIntegerField(null=True, blank=True)
     weight_kg = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     fitness_goal = models.CharField(max_length=32, choices=FitnessGoal.choices, default=FitnessGoal.GENERAL_FITNESS)
     fitness_level = models.CharField(max_length=16, choices=FitnessLevel.choices, default=FitnessLevel.BEGINNER)
+
+    def __str__(self):
+        return self.user.username
 
     
 
@@ -64,4 +64,10 @@ class Exercise(models.Model):
     def __str__(self):
         return self.name
 # This one for exercise list
+
+
+@receiver(post_save, sender=settings.AUTH_USER_MODEL)
+def create_user_profile(sender, instance, created, **kwargs):
+    if created:
+        UserProfile.objects.create(user=instance)
 

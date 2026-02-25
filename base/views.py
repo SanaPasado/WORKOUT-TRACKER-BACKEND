@@ -1,118 +1,158 @@
-from django.shortcuts import render
-from django.http import JsonResponse
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
 from django.contrib.auth.models import User
+from django.http import JsonResponse
+from django.shortcuts import get_object_or_404
+from rest_framework import serializers, status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework import serializers
+from rest_framework_simplejwt.views import TokenObtainPairView
 
-@api_view(['GET'])
+from .models import Exercise, UserProfile
+from .serializers import ExerciseSerializer, UserProfileSerializer
 
+
+@api_view(["GET"])
 def getRoutes(request):
     routes = [
-        '/api/token/',
-        '/api/token/refresh/',
-
-        '/api/users/login/',
-        '/api/users/register/',
-        '/api/users/profile/',
-        
-        
-
+        "/auth/register/",
+        "/users/login/",
+        "/auth/token/refresh/",
+        "/users/profile/",
+        "/exercises/",
     ]
     return JsonResponse(routes, safe=False)
 
 
-
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from rest_framework_simplejwt.views import TokenObtainPairView
-
-from django.contrib.auth.models import User
-from rest_framework import serializers
-from django.contrib.auth.hashers import make_password
-
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@api_view(["POST"])
 def register_user(request):
-    print(request.data['username'])
-    username_field = request.data['username']
-    password_field = request.data['password']
-    email_field = request.data['email'] 
+    username_field = request.data.get("username")
+    password_field = request.data.get("password")
+    email_field = request.data.get("email")
 
-    User.objects.create_user(username=username_field, password=make_password(password_field), email=email_field)
-    return Response ({'detail', request.data})
-class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
-    def validate(self, attrs):
-        data = super().validate(attrs)
-        
-        serializer = UserSerializer(self.user).data 
-       
-        for k, v in serializer.items():
-            data[k] = v
-        
-        return data
-    
-class MyTokenObtainPairView(TokenObtainPairView):
-    serializer_class = MyTokenObtainPairSerializer
+    if not username_field or not password_field or not email_field:
+        return Response(
+            {"detail": "username, email, and password are required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
+    if User.objects.filter(username=username_field).exists():
+        return Response({"detail": "Username already exists."}, status=status.HTTP_400_BAD_REQUEST)
 
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def getUserProfile(request):
-    user = request.user
-    serializer = UserSerializer(user, many = False)
-    return Response(serializer.data)
+    if User.objects.filter(email=email_field).exists():
+        return Response({"detail": "Email already exists."}, status=status.HTTP_400_BAD_REQUEST)
+
+    user = User.objects.create_user(
+        username=username_field,
+        password=password_field,
+        email=email_field,
+    )
+    UserProfile.objects.get_or_create(user=user)
+
+    serializer = UserSerializerWithToken(user, many=False)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
 
 class UserSerializer(serializers.ModelSerializer):
     name = serializers.SerializerMethodField(read_only=True)
     _id = serializers.SerializerMethodField(read_only=True)
     isAdmin = serializers.SerializerMethodField(read_only=True)
-    
+
     class Meta:
         model = User
-        fields = ['id', '_id', 'name', 'username', 'email', 'isAdmin']
-    
+        fields = ["id", "_id", "name", "username", "email", "isAdmin"]
+
     def get__id(self, obj):
         return obj.id
-    
+
     def get_isAdmin(self, obj):
         return obj.is_staff
-    
+
     def get_name(self, obj):
         name = obj.first_name
-        if name == '':
+        if name == "":
             name = obj.email
         return name
 
+
 class UserSerializerWithToken(UserSerializer):
     token = serializers.SerializerMethodField(read_only=True)
-    
+    needs_profile = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = User
-        fields = ['id', '_id', 'username', 'email', 'name', 'isAdmin', 'token']
-    
+        fields = ["id", "_id", "username", "email", "name", "isAdmin", "token", "needs_profile"]
+
     def get_token(self, obj):
         token = RefreshToken.for_user(obj)
         return str(token.access_token)
 
-from serializers import ExerciseSerializer
-from rest_framework.generics import ListAPIView
-from models import Exercise
+    def get_needs_profile(self, obj):
+        profile = getattr(obj, "profile", None)
+        return profile is None
+
+
+class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
+    def validate(self, attrs):
+        identifier = attrs.get("username")
+        if identifier and "@" in identifier:
+            try:
+                user = User.objects.get(email__iexact=identifier)
+                attrs["username"] = user.username
+            except User.DoesNotExist:
+                pass
+
+        data = super().validate(attrs)
+
+        serializer = UserSerializer(self.user).data
+        for k, v in serializer.items():
+            data[k] = v
+
+        profile = getattr(self.user, "profile", None)
+        data["needs_profile"] = profile is None
+        return data
+
+
+class MyTokenObtainPairView(TokenObtainPairView):
+    serializer_class = MyTokenObtainPairSerializer
+
+
+@api_view(["GET", "PUT"])
+@permission_classes([IsAuthenticated])
+def user_profile(request):
+    profile, _ = UserProfile.objects.get_or_create(user=request.user)
+
+    if request.method == "GET":
+        serializer = UserProfileSerializer(profile, many=False)
+        return Response(serializer.data)
+
+    serializer = UserProfileSerializer(profile, data=request.data, partial=True)
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    return Response(serializer.data)
+
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def exercise_list(request):
-    qs = Exercise.objects.all()
+    qs = Exercise.objects.filter(is_active=True)
 
     q = request.query_params.get("q")
     if q:
-        qs = qs.filter(name__icontains=q)  # replace "name" if your field is different
+        qs = qs.filter(name__icontains=q)
 
     category = request.query_params.get("category")
     if category:
-        qs = qs.filter(category__name__icontains=category).distinct()  # adjust to your model relation
+        qs = qs.filter(category__iexact=category)
 
     serializer = ExerciseSerializer(qs, many=True)
+    return Response(serializer.data)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def exercise_detail(request, pk):
+    exercise = get_object_or_404(Exercise, pk=pk, is_active=True)
+    serializer = ExerciseSerializer(exercise, many=False)
     return Response(serializer.data)
