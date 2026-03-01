@@ -1,6 +1,5 @@
 # Virtual Environment
 venv/
-env/
 ENV/
 myvenv/
 
@@ -45,5 +44,4 @@ db.sqlite3
 Thumbs.db
 
 # Environment variables
-.env
 .env.local
