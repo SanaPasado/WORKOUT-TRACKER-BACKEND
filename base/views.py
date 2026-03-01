@@ -1,6 +1,10 @@
+import logging
+import os
+
 from django.contrib.auth.models import User
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
+from google import genai
 from rest_framework import serializers, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -13,6 +17,9 @@ from .models import Exercise, UserProfile
 from .serializers import ExerciseSerializer, UserProfileSerializer
 
 
+logger = logging.getLogger(__name__)
+
+
 @api_view(["GET"])
 def getRoutes(request):
     routes = [
@@ -21,6 +28,7 @@ def getRoutes(request):
         "/auth/token/refresh/",
         "/users/profile/",
         "/exercises/",
+        "/chat/send-message/",
     ]
     return JsonResponse(routes, safe=False)
 
@@ -156,3 +164,52 @@ def exercise_detail(request, pk):
     exercise = get_object_or_404(Exercise, pk=pk, is_active=True)
     serializer = ExerciseSerializer(exercise, many=False)
     return Response(serializer.data)
+
+MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+API_KEY = os.environ.get("GEMINI_API_KEY")
+
+SYSTEM_PROMPT = """
+You are Angrit AI Coach, a friendly expert fitness coach for our workout tracker app.
+
+Rules:
+- Keep responses practical, concise, and motivating.
+- Focus on workouts, exercise form, programming splits, recovery, and basic nutrition habits.
+- Personalize advice to beginner/intermediate users when details are limited.
+- Prefer safe, progressive guidance (warm-up, proper form, manageable volume, rest days).
+- Never claim medical expertise or diagnosis; for pain, injury, or health risk, advise seeing a licensed professional.
+- If the request is unrelated to fitness/wellness/workout planning, reply exactly:
+    "I'm sorry! I'm only able to help with fitness, workouts, recovery, and nutrition basics."
+"""
+
+@api_view(["POST"])
+def chat_view(request):
+    user_message = (request.data.get("message") or "").strip()
+    if not user_message:
+        return Response({"error": "Message cannot be empty."}, status=status.HTTP_400_BAD_REQUEST)
+
+    # 3) Validate API key
+    if not API_KEY:
+        return Response(
+            {"error": "Server misconfiguration: GEMINI_API_KEY is missing."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    # 4) Call Gemini
+    try:
+        client = genai.Client(api_key=API_KEY)
+        prompt = f"{SYSTEM_PROMPT}\n\nUser: {user_message}"
+
+        result = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=prompt,
+        )
+
+        reply_text = (getattr(result, "text", None) or "").strip()
+        if not reply_text:
+            return Response({"error": "Model returned an empty response."}, status=status.HTTP_502_BAD_GATEWAY)
+
+        return Response({"reply": reply_text}, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.exception("Gemini request failed")
+        return Response({"error": f"Gemini request failed: {str(e)}"}, status=status.HTTP_502_BAD_GATEWAY)
