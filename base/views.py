@@ -1,9 +1,11 @@
 import logging
 import os
+from pathlib import Path
 
 from django.contrib.auth.models import User
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
+from dotenv import dotenv_values
 from google import genai
 from rest_framework import serializers, status
 from rest_framework.decorators import api_view, permission_classes
@@ -165,8 +167,8 @@ def exercise_detail(request, pk):
     serializer = ExerciseSerializer(exercise, many=False)
     return Response(serializer.data)
 
-MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
-API_KEY = os.environ.get("GEMINI_API_KEY")
+DEFAULT_MODEL_NAME = "gemini-2.5-flash"
+TEMP_HARDCODED_GEMINI_API_KEY = "AIzaSyDUiSi3S1WMeBL5UtUt78QdcXp22t1fZ6M"
 
 SYSTEM_PROMPT = """
 You are Angrit AI Coach, a friendly expert fitness coach for our workout tracker app.
@@ -183,12 +185,51 @@ Rules:
 
 @api_view(["POST"])
 def chat_view(request):
+  
     user_message = (request.data.get("message") or "").strip()
     if not user_message:
         return Response({"error": "Message cannot be empty."}, status=status.HTTP_400_BAD_REQUEST)
 
+    project_root = Path(__file__).resolve().parent.parent
+    root_env = dotenv_values(project_root / ".env")
+    base_env = dotenv_values(project_root / "base" / ".env")
+
+    env_key = (os.environ.get("GEMINI_API_KEY") or "").strip()
+    root_key = (root_env.get("GEMINI_API_KEY") or "").strip()
+    base_key = (base_env.get("GEMINI_API_KEY") or "").strip()
+
+    api_key = root_key or base_key or env_key
+    if root_key:
+        key_source = "project .env"
+    elif base_key:
+        key_source = "base/.env"
+    elif env_key:
+        key_source = "env"
+    else:
+        key_source = "missing"
+
+    env_model = (os.environ.get("GEMINI_MODEL") or "").strip()
+    root_model = (root_env.get("GEMINI_MODEL") or "").strip()
+    base_model = (base_env.get("GEMINI_MODEL") or "").strip()
+    model_name = root_model or base_model or env_model or DEFAULT_MODEL_NAME
+    if root_model:
+        model_source = "project .env"
+    elif base_model:
+        model_source = "base/.env"
+    elif env_model:
+        model_source = "env"
+    else:
+        model_source = "default"
+
+    if not api_key:
+        api_key = TEMP_HARDCODED_GEMINI_API_KEY.strip()
+        key_source = "hardcoded fallback"
+
+    masked_key = f"{api_key[:6]}...{api_key[-4:]}" if len(api_key) > 10 else "(missing/invalid)"
+    print(f"[chat_view] Gemini key source={key_source}, key={masked_key}, model source={model_source}, model={model_name}")
+
     # 3) Validate API key
-    if not API_KEY:
+    if not api_key:
         return Response(
             {"error": "Server misconfiguration: GEMINI_API_KEY is missing."},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -196,11 +237,11 @@ def chat_view(request):
 
     # 4) Call Gemini
     try:
-        client = genai.Client(api_key=API_KEY)
+        client = genai.Client(api_key=api_key)
         prompt = f"{SYSTEM_PROMPT}\n\nUser: {user_message}"
 
         result = client.models.generate_content(
-            model=MODEL_NAME,
+            model=model_name,
             contents=prompt,
         )
 
