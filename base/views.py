@@ -106,12 +106,26 @@ class UserSerializerWithToken(UserSerializer):
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         identifier = attrs.get("username")
-        if identifier and "@" in identifier:
-            try:
-                user = User.objects.get(email__iexact=identifier)
-                attrs["username"] = user.username
-            except User.DoesNotExist:
-                pass
+        password = attrs.get("password")
+
+        user = None
+        if identifier:
+            if "@" in identifier:
+                user = User.objects.filter(email__iexact=identifier).first()
+            else:
+                user = User.objects.filter(username=identifier).first()
+
+        if not user:
+            raise serializers.ValidationError(
+                {"detail": "No account found with the provided credentials."}
+            )
+
+        if not password or not user.check_password(password):
+            raise serializers.ValidationError(
+                {"detail": "Incorrect password. Please try again."}
+            )
+
+        attrs["username"] = user.username
 
         data = super().validate(attrs)
 
