@@ -24,7 +24,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 from .models import Exercise, UserProfile
-from .serializers import ExerciseSerializer, UserProfileSerializer
+from .models import WorkoutSplit
+from .serializers import ExerciseSerializer, UserProfileSerializer, WorkoutSplitSerializer
 
 
 logger = logging.getLogger(__name__)
@@ -281,6 +282,46 @@ def exercise_detail(request, pk):
     exercise = get_object_or_404(Exercise, pk=pk, is_active=True)
     serializer = ExerciseSerializer(exercise, many=False)
     return Response(serializer.data)
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated])
+def workout_split_list(request):
+    if request.method == "GET":
+        splits = WorkoutSplit.objects.filter(user=request.user).prefetch_related(
+            "programs__exercise_items"
+        )
+        serializer = WorkoutSplitSerializer(splits, many=True)
+        return Response(serializer.data)
+
+    serializer = WorkoutSplitSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    split = serializer.save(user=request.user)
+    response_serializer = WorkoutSplitSerializer(split)
+    return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(["GET", "PUT", "DELETE"])
+@permission_classes([IsAuthenticated])
+def workout_split_detail(request, pk):
+    split = get_object_or_404(
+        WorkoutSplit.objects.prefetch_related("programs__exercise_items"),
+        pk=pk,
+        user=request.user,
+    )
+
+    if request.method == "GET":
+        serializer = WorkoutSplitSerializer(split)
+        return Response(serializer.data)
+
+    if request.method == "PUT":
+        serializer = WorkoutSplitSerializer(split, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        split = serializer.save()
+        return Response(WorkoutSplitSerializer(split).data)
+
+    split.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
 
 DEFAULT_MODEL_NAME = "gemini-2.5-flash"
 TEMP_HARDCODED_GEMINI_API_KEY = "AIzaSyDUiSi3S1WMeBL5UtUt78QdcXp22t1fZ6M"

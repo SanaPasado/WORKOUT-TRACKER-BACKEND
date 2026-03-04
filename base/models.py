@@ -67,6 +67,43 @@ class Exercise(models.Model):
 # This one for exercise list
 
 
+class WorkoutSplit(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="workout_splits")
+    name = models.CharField(max_length=120)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at", "-created_at"]
+
+    def __str__(self):
+        return f"{self.user.username} - {self.name}"
+
+
+class WorkoutProgram(models.Model):
+    split = models.ForeignKey(WorkoutSplit, on_delete=models.CASCADE, related_name="programs")
+    name = models.CharField(max_length=120)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["order", "id"]
+
+    def __str__(self):
+        return self.name
+
+
+class WorkoutProgramExercise(models.Model):
+    program = models.ForeignKey(WorkoutProgram, on_delete=models.CASCADE, related_name="exercise_items")
+    exercise_name = models.CharField(max_length=120)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["order", "id"]
+
+    def __str__(self):
+        return self.exercise_name
+
+
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
 def create_user_profile(sender, instance, created, **kwargs):
     if created:
