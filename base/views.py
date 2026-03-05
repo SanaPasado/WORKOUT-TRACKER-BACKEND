@@ -324,7 +324,6 @@ def workout_split_detail(request, pk):
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 DEFAULT_MODEL_NAME = "gemini-2.5-flash"
-TEMP_HARDCODED_GEMINI_API_KEY = "AIzaSyDUiSi3S1WMeBL5UtUt78QdcXp22t1fZ6M"
 
 SYSTEM_PROMPT = """
 You are Angrit AI Coach, a friendly expert fitness coach for our workout tracker app.
@@ -376,10 +375,6 @@ def chat_view(request):
         model_source = "env"
     else:
         model_source = "default"
-
-    if not api_key:
-        api_key = TEMP_HARDCODED_GEMINI_API_KEY.strip()
-        key_source = "hardcoded fallback"
 
     masked_key = f"{api_key[:6]}...{api_key[-4:]}" if len(api_key) > 10 else "(missing/invalid)"
     print(f"[chat_view] Gemini key source={key_source}, key={masked_key}, model source={model_source}, model={model_name}")
