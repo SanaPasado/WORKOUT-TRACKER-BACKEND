@@ -40,6 +40,17 @@ from .serializers import (
 logger = logging.getLogger(__name__)
 
 
+def is_profile_complete(profile):
+    if not profile:
+        return False
+    required_fields = [
+        profile.age,
+        profile.height_cm,
+        profile.weight_kg,
+    ]
+    return all(value is not None for value in required_fields)
+
+
 @api_view(["GET"])
 def getRoutes(request):
     routes = [
@@ -119,7 +130,7 @@ class UserSerializerWithToken(UserSerializer):
 
     def get_needs_profile(self, obj):
         profile = getattr(obj, "profile", None)
-        return profile is None
+        return not is_profile_complete(profile)
 
 
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -153,7 +164,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             data[k] = v
 
         profile = getattr(self.user, "profile", None)
-        data["needs_profile"] = profile is None
+        data["needs_profile"] = not is_profile_complete(profile)
         return data
 
 
