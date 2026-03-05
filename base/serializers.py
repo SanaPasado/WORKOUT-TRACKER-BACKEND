@@ -2,6 +2,7 @@ from rest_framework import serializers
 from .models import (
     Exercise,
     UserProfile,
+    WorkoutLog,
     WorkoutSplit,
     WorkoutProgram,
     WorkoutProgramExercise,
@@ -24,6 +25,13 @@ class ExerciseSerializer(serializers.ModelSerializer):
     class Meta:
         model = Exercise
         fields = ["id", "name", "category", "difficulty", "muscle_group", "tutorial_url", "is_premium"]
+
+
+class WorkoutLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WorkoutLog
+        fields = ["id", "exercise", "sets", "reps", "weight", "date", "created_at"]
+        read_only_fields = ["id", "created_at"]
 
 
 class WorkoutProgramExerciseSerializer(serializers.ModelSerializer):

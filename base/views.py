@@ -1,5 +1,8 @@
 import logging
 import os
+import json
+import re
+from datetime import timedelta
 from pathlib import Path
 
 from django.conf import settings
@@ -8,6 +11,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.utils.encoding import force_bytes
@@ -23,9 +27,14 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .models import Exercise, UserProfile
+from .models import Exercise, UserProfile, WorkoutLog
 from .models import WorkoutSplit
-from .serializers import ExerciseSerializer, UserProfileSerializer, WorkoutSplitSerializer
+from .serializers import (
+    ExerciseSerializer,
+    UserProfileSerializer,
+    WorkoutLogSerializer,
+    WorkoutSplitSerializer,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -40,6 +49,7 @@ def getRoutes(request):
         "/users/profile/",
         "/exercises/",
         "/chat/send-message/",
+        "/programs/generate/",
     ]
     return JsonResponse(routes, safe=False)
 
@@ -286,6 +296,62 @@ def exercise_detail(request, pk):
 
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
+def workout_log_list(request):
+    if request.method == "GET":
+        logs = WorkoutLog.objects.filter(user=request.user)
+        serializer = WorkoutLogSerializer(logs, many=True)
+        return Response(serializer.data)
+
+    serializer = WorkoutLogSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    log = serializer.save(user=request.user)
+    return Response(WorkoutLogSerializer(log).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(["DELETE"])
+@permission_classes([IsAuthenticated])
+def workout_log_detail(request, pk):
+    log = get_object_or_404(WorkoutLog, pk=pk, user=request.user)
+    log.delete()
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def dashboard_stats(request):
+    logs = WorkoutLog.objects.filter(user=request.user)
+    workout_dates = sorted({log.date for log in logs}, reverse=True)
+
+    today = timezone.now().date()
+    date_set = set(workout_dates)
+
+    current_streak = 0
+    cursor_date = today
+    while cursor_date in date_set:
+        current_streak += 1
+        cursor_date -= timedelta(days=1)
+
+    week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
+    weekly_days_completed = sorted(
+        [day.isoformat() for day in workout_dates if week_start <= day <= week_end]
+    )
+
+    total_minutes = sum(max(1, int(log.sets) * 2) for log in logs)
+
+    return Response(
+        {
+            "total_workouts": len(workout_dates),
+            "total_minutes": total_minutes,
+            "current_streak": current_streak,
+            "weekly_completed": len(weekly_days_completed),
+            "weekly_days_completed": weekly_days_completed,
+        }
+    )
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated])
 def workout_split_list(request):
     if request.method == "GET":
         splits = WorkoutSplit.objects.filter(user=request.user).prefetch_related(
@@ -338,13 +404,26 @@ Rules:
     "I'm sorry! I'm only able to help with fitness, workouts, recovery, and nutrition basics."
 """
 
-@api_view(["POST"])
-def chat_view(request):
-  
-    user_message = (request.data.get("message") or "").strip()
-    if not user_message:
-        return Response({"error": "Message cannot be empty."}, status=status.HTTP_400_BAD_REQUEST)
+PROGRAM_JSON_PROMPT = """
+You are Angrit AI Coach. Generate a personalized 12-week workout program in STRICT JSON only.
 
+Output rules:
+- Return a JSON array with exactly 12 items (weeks 1..12).
+- Each week object must contain:
+  - "week": integer (1 to 12)
+  - "focus": short string
+  - "days": array of 4 to 6 day objects
+- Each day object must contain:
+  - "day": string (e.g., "Day 1")
+  - "workout": short string (e.g., "Upper Body Strength")
+  - "exercises": array of 4 to 8 exercise names (strings)
+- Keep it realistic and progressive for the user's fitness level.
+- Include warm-up, recovery, and deload considerations naturally across weeks.
+- No markdown, no code fences, no extra keys, no prose.
+"""
+
+
+def _resolve_gemini_credentials():
     project_root = Path(__file__).resolve().parent.parent
     root_env = dotenv_values(project_root / ".env")
     base_env = dotenv_values(project_root / "base" / ".env")
@@ -377,6 +456,52 @@ def chat_view(request):
         model_source = "default"
 
     masked_key = f"{api_key[:6]}...{api_key[-4:]}" if len(api_key) > 10 else "(missing/invalid)"
+    return api_key, model_name, key_source, model_source, masked_key
+
+
+def _extract_json_array(text):
+    cleaned = (text or "").strip()
+    if not cleaned:
+        raise ValueError("Model returned an empty response.")
+
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned).strip()
+
+    data = json.loads(cleaned)
+    if not isinstance(data, list):
+        raise ValueError("Model response is not a JSON array.")
+    return data
+
+
+def _build_program_context(request):
+    profile = getattr(request.user, "profile", None)
+    goal = getattr(profile, "fitness_goal", "GENERAL_FITNESS") if profile else "GENERAL_FITNESS"
+    level = getattr(profile, "fitness_level", "BEGINNER") if profile else "BEGINNER"
+    age = getattr(profile, "age", None) if profile else None
+    height_cm = getattr(profile, "height_cm", None) if profile else None
+    weight_kg = getattr(profile, "weight_kg", None) if profile else None
+
+    requirements = request.data.get("requirements")
+
+    return {
+        "username": request.user.username,
+        "fitness_goal": goal,
+        "fitness_level": level,
+        "age": age,
+        "height_cm": height_cm,
+        "weight_kg": float(weight_kg) if weight_kg is not None else None,
+        "requirements": requirements or "",
+    }
+
+@api_view(["POST"])
+def chat_view(request):
+  
+    user_message = (request.data.get("message") or "").strip()
+    if not user_message:
+        return Response({"error": "Message cannot be empty."}, status=status.HTTP_400_BAD_REQUEST)
+
+    api_key, model_name, key_source, model_source, masked_key = _resolve_gemini_credentials()
     print(f"[chat_view] Gemini key source={key_source}, key={masked_key}, model source={model_source}, model={model_name}")
 
     # 3) Validate API key
@@ -405,3 +530,49 @@ def chat_view(request):
     except Exception as e:
         logger.exception("Gemini request failed")
         return Response({"error": f"Gemini request failed: {str(e)}"}, status=status.HTTP_502_BAD_GATEWAY)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def generate_training_program(request):
+    api_key, model_name, key_source, model_source, masked_key = _resolve_gemini_credentials()
+    print(
+        f"[generate_training_program] Gemini key source={key_source}, key={masked_key}, "
+        f"model source={model_source}, model={model_name}"
+    )
+
+    if not api_key:
+        return Response(
+            {"detail": "Server misconfiguration: GEMINI_API_KEY is missing."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    profile_context = _build_program_context(request)
+    prompt = (
+        f"{PROGRAM_JSON_PROMPT}\n\n"
+        f"User context (JSON):\n{json.dumps(profile_context, ensure_ascii=False)}\n\n"
+        "Generate the program now."
+    )
+
+    try:
+        client = genai.Client(api_key=api_key)
+        result = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+        )
+
+        raw_text = (getattr(result, "text", None) or "").strip()
+        weeks = _extract_json_array(raw_text)
+        return Response(weeks, status=status.HTTP_200_OK)
+    except json.JSONDecodeError:
+        logger.exception("Gemini returned invalid JSON")
+        return Response(
+            {"detail": "AI returned invalid JSON format. Please try again."},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+    except Exception as error:
+        logger.exception("Program generation failed")
+        return Response(
+            {"detail": f"Program generation failed: {str(error)}"},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )

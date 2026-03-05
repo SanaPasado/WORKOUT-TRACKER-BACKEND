@@ -2,6 +2,7 @@ from django.db import models
 from django.conf import settings
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+from django.utils import timezone
 
 class FitnessGoal(models.TextChoices):
     BUILD_MUSCLE = "BUILD_MUSCLE", "Build Muscle"
@@ -65,6 +66,22 @@ class Exercise(models.Model):
     def __str__(self):
         return self.name
 # This one for exercise list
+
+
+class WorkoutLog(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="workout_logs")
+    exercise = models.CharField(max_length=120)
+    sets = models.PositiveIntegerField(default=1)
+    reps = models.PositiveIntegerField(default=0)
+    weight = models.DecimalField(max_digits=7, decimal_places=2, default=0)
+    date = models.DateField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-created_at", "-id"]
+
+    def __str__(self):
+        return f"{self.user.username} - {self.exercise} ({self.date})"
 
 
 class WorkoutSplit(models.Model):
