@@ -17,6 +17,7 @@ from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.utils.encoding import force_bytes
 from django.core.mail import send_mail
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from dotenv import dotenv_values
 from google import genai
 from rest_framework import serializers, status
@@ -27,8 +28,14 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .models import Exercise, UserProfile, WorkoutLog
-from .models import WorkoutSplit
+from .models import (
+    Exercise,
+    UserProfile,
+    WorkoutLog,
+    WorkoutSplit,
+    WorkoutProgram,
+    WorkoutProgramExercise,
+)
 from .serializers import (
     ExerciseSerializer,
     UserProfileSerializer,
@@ -419,15 +426,17 @@ PROGRAM_JSON_PROMPT = """
 You are Angrit AI Coach. Generate a personalized 12-week workout program in STRICT JSON only.
 
 Output rules:
-- Return a JSON array with exactly 12 items (weeks 1..12).
+- Return one JSON object with these top-level keys only:
+    - "split_name": short string
+    - "weeks": array with exactly 12 items (weeks 1..12)
 - Each week object must contain:
-  - "week": integer (1 to 12)
-  - "focus": short string
-  - "days": array of 4 to 6 day objects
+    - "week": integer (1 to 12)
+    - "focus": short string
+    - "days": array of 4 to 6 day objects
 - Each day object must contain:
-  - "day": string (e.g., "Day 1")
-  - "workout": short string (e.g., "Upper Body Strength")
-  - "exercises": array of 4 to 8 exercise names (strings)
+    - "day": string (e.g., "Day 1")
+    - "workout": short string (e.g., "Upper Body Strength")
+    - "exercises": array of 4 to 8 exercise names (strings)
 - Keep it realistic and progressive for the user's fitness level.
 - Include warm-up, recovery, and deload considerations naturally across weeks.
 - No markdown, no code fences, no extra keys, no prose.
@@ -470,7 +479,42 @@ def _resolve_gemini_credentials():
     return api_key, model_name, key_source, model_source, masked_key
 
 
-def _extract_json_array(text):
+def _extract_first_json_block(text):
+    start_indices = [index for index in (text.find("{"), text.find("[")) if index >= 0]
+    if not start_indices:
+        return None
+
+    start = min(start_indices)
+    opening = text[start]
+    closing = "}" if opening == "{" else "]"
+    depth = 0
+    in_string = False
+    escaped = False
+
+    for index in range(start, len(text)):
+        char = text[index]
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == opening:
+            depth += 1
+        elif char == closing:
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+
+    return None
+
+
+def _extract_program_payload(text):
     cleaned = (text or "").strip()
     if not cleaned:
         raise ValueError("Model returned an empty response.")
@@ -479,10 +523,81 @@ def _extract_json_array(text):
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"\s*```$", "", cleaned).strip()
 
-    data = json.loads(cleaned)
-    if not isinstance(data, list):
-        raise ValueError("Model response is not a JSON array.")
-    return data
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        json_block = _extract_first_json_block(cleaned)
+        if not json_block:
+            raise
+        data = json.loads(json_block)
+
+    if isinstance(data, list):
+        weeks = data
+        split_name = "AI Generated Split"
+    elif isinstance(data, dict):
+        weeks = data.get("weeks")
+        split_name = (data.get("split_name") or "AI Generated Split").strip()
+    else:
+        raise ValueError("Model response is not valid JSON program data.")
+
+    if not isinstance(weeks, list):
+        raise ValueError("Model response missing 'weeks' array.")
+    if len(weeks) != 12:
+        raise ValueError("Model response must contain exactly 12 weeks.")
+
+    return {
+        "split_name": split_name or "AI Generated Split",
+        "weeks": weeks,
+    }
+
+
+def _build_program_name(week_number, day_index, day_payload):
+    day_name = (day_payload.get("day") or f"Day {day_index + 1}").strip()
+    workout_name = (day_payload.get("workout") or "Workout").strip()
+    return f"Week {week_number} - {day_name}: {workout_name}"[:120]
+
+
+def _persist_generated_program(user, split_name, weeks):
+    with transaction.atomic():
+        split = WorkoutSplit.objects.create(
+            user=user,
+            name=(split_name or "AI Generated Split")[:120],
+        )
+
+        program_order = 0
+        for week_index, week in enumerate(weeks):
+            week_number = week.get("week") if isinstance(week, dict) else None
+            week_number = week_number if isinstance(week_number, int) else (week_index + 1)
+            days = week.get("days") if isinstance(week, dict) else []
+            if not isinstance(days, list):
+                continue
+
+            for day_index, day in enumerate(days):
+                if not isinstance(day, dict):
+                    continue
+
+                program = WorkoutProgram.objects.create(
+                    split=split,
+                    name=_build_program_name(week_number, day_index, day),
+                    order=program_order,
+                )
+                program_order += 1
+
+                exercises = day.get("exercises") or []
+                if not isinstance(exercises, list):
+                    continue
+
+                for exercise_index, exercise_name in enumerate(exercises):
+                    cleaned_exercise = str(exercise_name).strip()
+                    if not cleaned_exercise:
+                        continue
+                    WorkoutProgramExercise.objects.create(
+                        program=program,
+                        exercise_name=cleaned_exercise[:120],
+                        order=exercise_index,
+                    )
+
+    return split
 
 
 def _build_program_context(request):
@@ -492,6 +607,19 @@ def _build_program_context(request):
     age = getattr(profile, "age", None) if profile else None
     height_cm = getattr(profile, "height_cm", None) if profile else None
     weight_kg = getattr(profile, "weight_kg", None) if profile else None
+    recent_logs = list(
+        WorkoutLog.objects.filter(user=request.user)
+        .order_by("-date", "-created_at")
+        .values("exercise", "sets", "reps", "weight", "date")[:20]
+    )
+    existing_splits = list(
+        WorkoutSplit.objects.filter(user=request.user)
+        .order_by("-updated_at")
+        .values("name")[:10]
+    )
+    available_exercises = list(
+        Exercise.objects.filter(is_active=True).order_by("name").values_list("name", flat=True)[:200]
+    )
 
     requirements = request.data.get("requirements")
 
@@ -502,6 +630,9 @@ def _build_program_context(request):
         "age": age,
         "height_cm": height_cm,
         "weight_kg": float(weight_kg) if weight_kg is not None else None,
+        "available_exercises": available_exercises,
+        "recent_workout_logs": recent_logs,
+        "existing_split_names": [split["name"] for split in existing_splits],
         "requirements": requirements or "",
     }
 
@@ -573,12 +704,32 @@ def generate_training_program(request):
         )
 
         raw_text = (getattr(result, "text", None) or "").strip()
-        weeks = _extract_json_array(raw_text)
-        return Response(weeks, status=status.HTTP_200_OK)
+        generated_program = _extract_program_payload(raw_text)
+        created_split = _persist_generated_program(
+            user=request.user,
+            split_name=generated_program.get("split_name"),
+            weeks=generated_program.get("weeks", []),
+        )
+        return Response(
+            {
+                "split": {
+                    "id": created_split.id,
+                    "name": created_split.name,
+                },
+                "weeks": generated_program.get("weeks", []),
+            },
+            status=status.HTTP_200_OK,
+        )
     except json.JSONDecodeError:
         logger.exception("Gemini returned invalid JSON")
         return Response(
             {"detail": "AI returned invalid JSON format. Please try again."},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+    except ValueError as error:
+        logger.exception("Gemini returned invalid program shape")
+        return Response(
+            {"detail": f"AI returned invalid program shape: {str(error)}"},
             status=status.HTTP_502_BAD_GATEWAY,
         )
     except Exception as error:
