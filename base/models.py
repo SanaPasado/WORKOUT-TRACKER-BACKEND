@@ -24,6 +24,7 @@ class UserProfile(models.Model):
     weight_kg = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     fitness_goal = models.CharField(max_length=32, choices=FitnessGoal.choices, default=FitnessGoal.GENERAL_FITNESS)
     fitness_level = models.CharField(max_length=16, choices=FitnessLevel.choices, default=FitnessLevel.BEGINNER)
+    is_premium = models.BooleanField(default=False)
 
     def __str__(self):
         return self.user.username
@@ -36,34 +37,31 @@ class UserProfile(models.Model):
 
 
 class ExerciseCategory(models.TextChoices):
-    CHEST = "CHEST", "Chest"
-    BACK = "BACK", "Back"
-    SHOULDERS = "SHOULDERS", "Shoulders"
-    ARMS = "ARMS", "Arms"
-    LEGS = "LEGS", "Legs"
-    CORE = "CORE", "Core"
-    CARDIO = "CARDIO", "Cardio"
+    CARDIO = "cardio", "Cardio"
+    STRENGTH = "strength", "Strength"
+    STRETCHING = "stretching", "Stretching"
+    FLEXIBILITY = "flexibility", "Flexibility"
 
 class Difficulty(models.TextChoices):
-    BEGINNER = "BEGINNER", "Beginner"
-    INTERMEDIATE = "INTERMEDIATE", "Intermediate"
-    ADVANCED = "ADVANCED", "Advanced"
+    EASY = "easy", "Easy"
+    MEDIUM = "medium", "Medium"
+    HARD = "hard", "Hard"
 
 class Exercise(models.Model):
-    name = models.CharField(max_length=120, unique=True)
+    exercise_name = models.CharField(max_length=120, unique=True)
+    description = models.TextField(blank=True)
     category = models.CharField(max_length=20, choices=ExerciseCategory.choices)
-    difficulty = models.CharField(max_length=20, choices=Difficulty.choices)
-    muscle_group = models.CharField(max_length=120)
-    tutorial_url = models.URLField(blank=True, null=True)
+    difficulty_level = models.CharField(max_length=20, choices=Difficulty.choices)
+    video_url = models.URLField()
+    muscle_groups_targeted = models.CharField(max_length=255, blank=True, null=True)
+    equipment_needed = models.CharField(max_length=255, blank=True, null=True)
     is_premium = models.BooleanField(default=False)
-    is_active = models.BooleanField(default=True)  # optional
-    created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ["name"]
+        ordering = ["exercise_name"]
 
     def __str__(self):
-        return self.name
+        return self.exercise_name
 # This one for exercise list
 
 

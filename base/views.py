@@ -17,14 +17,21 @@ from dotenv import dotenv_values
 from google import genai
 from rest_framework import serializers, status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.generics import CreateAPIView, DestroyAPIView, ListAPIView, RetrieveAPIView, UpdateAPIView
+from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser
 from rest_framework.response import Response
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 from .models import Exercise, UserProfile
-from .serializers import ExerciseSerializer, UserProfileSerializer
+from .permissions import IsPremiumUser
+from .serializers import (
+    ExerciseAdminSerializer,
+    ExerciseDetailSerializer,
+    ExerciseListSerializer,
+    UserProfileSerializer,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -97,10 +104,11 @@ class UserSerializer(serializers.ModelSerializer):
 class UserSerializerWithToken(UserSerializer):
     token = serializers.SerializerMethodField(read_only=True)
     needs_profile = serializers.SerializerMethodField(read_only=True)
+    is_premium = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = User
-        fields = ["id", "_id", "username", "email", "name", "isAdmin", "token", "needs_profile"]
+        fields = ["id", "_id", "username", "email", "name", "isAdmin", "token", "needs_profile", "is_premium"]
 
     def get_token(self, obj):
         token = RefreshToken.for_user(obj)
@@ -109,6 +117,10 @@ class UserSerializerWithToken(UserSerializer):
     def get_needs_profile(self, obj):
         profile = getattr(obj, "profile", None)
         return profile is None
+
+    def get_is_premium(self, obj):
+        profile = getattr(obj, "profile", None)
+        return bool(profile and profile.is_premium)
 
 
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -143,6 +155,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
 
         profile = getattr(self.user, "profile", None)
         data["needs_profile"] = profile is None
+        data["is_premium"] = bool(profile and profile.is_premium)
         return data
 
 
@@ -258,29 +271,56 @@ def user_profile(request):
     return Response(serializer.data)
 
 
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def exercise_list(request):
-    qs = Exercise.objects.filter(is_active=True)
+class ExerciseListView(ListAPIView):
+    """Public endpoint for free users: returns only basic exercise fields."""
 
-    q = request.query_params.get("q")
-    if q:
-        qs = qs.filter(name__icontains=q)
+    serializer_class = ExerciseListSerializer
+    permission_classes = [AllowAny]
 
-    category = request.query_params.get("category")
-    if category:
-        qs = qs.filter(category__iexact=category)
+    def get_queryset(self):
+        queryset = Exercise.objects.all().order_by("exercise_name")
 
-    serializer = ExerciseSerializer(qs, many=True)
-    return Response(serializer.data)
+        query = self.request.query_params.get("q")
+        if query:
+            queryset = queryset.filter(exercise_name__icontains=query)
+
+        category = self.request.query_params.get("category")
+        if category:
+            queryset = queryset.filter(category__iexact=category)
+
+        return queryset
 
 
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def exercise_detail(request, pk):
-    exercise = get_object_or_404(Exercise, pk=pk, is_active=True)
-    serializer = ExerciseSerializer(exercise, many=False)
-    return Response(serializer.data)
+class ExerciseDetailView(RetrieveAPIView):
+    """Premium endpoint: full exercise details for premium or admin users."""
+
+    queryset = Exercise.objects.all()
+    serializer_class = ExerciseDetailSerializer
+    permission_classes = [IsPremiumUser]
+
+
+class ExerciseCreateView(CreateAPIView):
+    """Admin-only create endpoint."""
+
+    queryset = Exercise.objects.all()
+    serializer_class = ExerciseAdminSerializer
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+
+class ExerciseUpdateView(UpdateAPIView):
+    """Admin-only update endpoint."""
+
+    queryset = Exercise.objects.all()
+    serializer_class = ExerciseAdminSerializer
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+
+class ExerciseDeleteView(DestroyAPIView):
+    """Admin-only delete endpoint."""
+
+    queryset = Exercise.objects.all()
+    serializer_class = ExerciseAdminSerializer
+    permission_classes = [IsAuthenticated, IsAdminUser]
 
 DEFAULT_MODEL_NAME = "gemini-2.5-flash"
 TEMP_HARDCODED_GEMINI_API_KEY = "AIzaSyDUiSi3S1WMeBL5UtUt78QdcXp22t1fZ6M"

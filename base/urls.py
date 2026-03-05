@@ -12,7 +12,10 @@ urlpatterns = [
     path('users/reset-password/', views.reset_password, name='reset-password'),
     path('auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('users/profile/', views.user_profile, name='user-profile'),
-    path('exercises/', views.exercise_list, name='exercise-list'),
-    path('exercises/<int:pk>/', views.exercise_detail, name='exercise-detail'),
+    path('exercises/', views.ExerciseListView.as_view(), name='exercise-list'),
+    path('exercises/create/', views.ExerciseCreateView.as_view(), name='exercise-create'),
+    path('exercises/<int:pk>/', views.ExerciseDetailView.as_view(), name='exercise-detail'),
+    path('exercises/<int:pk>/update/', views.ExerciseUpdateView.as_view(), name='exercise-update'),
+    path('exercises/<int:pk>/delete/', views.ExerciseDeleteView.as_view(), name='exercise-delete'),
     path('chat/send-message/', views.chat_view, name='chat-view'),
 ]
