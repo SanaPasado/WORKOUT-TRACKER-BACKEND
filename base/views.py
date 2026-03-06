@@ -2,6 +2,7 @@ import logging
 import os
 import json
 import re
+from smtplib import SMTPException
 from datetime import timedelta
 from pathlib import Path
 
@@ -74,9 +75,9 @@ def getRoutes(request):
 
 @api_view(["POST"])
 def register_user(request):
-    username_field = request.data.get("username")
+    username_field = (request.data.get("username") or "").strip()
     password_field = request.data.get("password")
-    email_field = request.data.get("email")
+    email_field = (request.data.get("email") or "").strip().lower()
 
     if not username_field or not password_field or not email_field:
         return Response(
@@ -90,15 +91,104 @@ def register_user(request):
     if User.objects.filter(email=email_field).exists():
         return Response({"detail": "Email already exists."}, status=status.HTTP_400_BAD_REQUEST)
 
-    user = User.objects.create_user(
-        username=username_field,
-        password=password_field,
-        email=email_field,
-    )
-    UserProfile.objects.get_or_create(user=user)
+    try:
+        validate_password(password_field)
+    except ValidationError as error:
+        return Response(
+            {"detail": error.messages},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
-    serializer = UserSerializerWithToken(user, many=False)
-    return Response(serializer.data, status=status.HTTP_201_CREATED)
+    try:
+        with transaction.atomic():
+            user = User.objects.create_user(
+                username=username_field,
+                password=password_field,
+                email=email_field,
+                is_active=False,
+            )
+            UserProfile.objects.get_or_create(user=user)
+
+            uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
+            verify_token = default_token_generator.make_token(user)
+            combined_token = f"{uidb64}:{verify_token}"
+            verify_url = f"{settings.EMAIL_VERIFICATION_FRONTEND_URL}?token={combined_token}"
+
+            send_mail(
+                "Verify your ANGRIT account",
+                (
+                    "Welcome to ANGRIT. Please verify your email address before signing in.\n\n"
+                    f"Verification link:\n{verify_url}\n\n"
+                    "If you did not create this account, you can ignore this email."
+                ),
+                settings.DEFAULT_FROM_EMAIL,
+                [user.email],
+                fail_silently=False,
+            )
+    except SMTPException:
+        logger.exception("SMTP failed while sending verification email")
+        return Response(
+            {"detail": "Unable to send verification email. Please verify SMTP configuration."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    except Exception:
+        logger.exception("Unexpected error while registering user")
+        return Response(
+            {"detail": "Registration failed. Please try again."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    return Response(
+        {
+            "message": "Account created. Please check your email and verify your account before login.",
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(["GET", "POST"])
+def verify_email(request):
+    raw_token = ""
+    if request.method == "GET":
+        raw_token = (request.query_params.get("token") or "").strip()
+    else:
+        raw_token = (request.data.get("token") or "").strip()
+
+    if not raw_token:
+        return Response(
+            {"detail": "Verification token is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        uidb64, token = raw_token.split(":", 1)
+        uid = force_str(urlsafe_base64_decode(uidb64))
+        user = User.objects.get(pk=uid)
+    except (ValueError, TypeError, OverflowError, User.DoesNotExist):
+        return Response(
+            {"detail": "Invalid verification token."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not default_token_generator.check_token(user, token):
+        return Response(
+            {"detail": "This verification link is invalid or has expired."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if user.is_active:
+        return Response(
+            {"message": "Email is already verified. You can log in now."},
+            status=status.HTTP_200_OK,
+        )
+
+    user.is_active = True
+    user.save(update_fields=["is_active"])
+
+    return Response(
+        {"message": "Email verified successfully. You can now log in."},
+        status=status.HTTP_200_OK,
+    )
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -157,6 +247,11 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
                 {"detail": "No account found with the provided credentials."}
             )
 
+        if not user.is_active:
+            raise serializers.ValidationError(
+                {"detail": "Please verify your email before logging in."}
+            )
+
         if not password or not user.check_password(password):
             raise serializers.ValidationError(
                 {"detail": "Incorrect password. Please try again."}
@@ -195,6 +290,12 @@ def forgot_password(request):
             status=status.HTTP_404_NOT_FOUND,
         )
 
+    if not user.is_active:
+        return Response(
+            {"detail": "This account is not verified yet. Please verify your email first."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
     reset_token = default_token_generator.make_token(user)
     combined_token = f"{uidb64}:{reset_token}"
@@ -207,13 +308,26 @@ def forgot_password(request):
         "If you did not request this, you can ignore this email."
     )
 
-    send_mail(
-        subject,
-        message,
-        settings.DEFAULT_FROM_EMAIL,
-        [user.email],
-        fail_silently=False,
-    )
+    try:
+        send_mail(
+            subject,
+            message,
+            settings.DEFAULT_FROM_EMAIL,
+            [user.email],
+            fail_silently=False,
+        )
+    except SMTPException:
+        logger.exception("SMTP failed while sending password reset email")
+        return Response(
+            {"detail": "Unable to send reset email. Please verify SMTP configuration."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    except Exception:
+        logger.exception("Unexpected error while sending password reset email")
+        return Response(
+            {"detail": "Unable to send reset email right now. Please try again later."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
     return Response(
         {"message": "Password reset email sent successfully."},
