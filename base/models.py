@@ -25,6 +25,10 @@ class UserProfile(models.Model):
     weight_kg = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     fitness_goal = models.CharField(max_length=32, choices=FitnessGoal.choices, default=FitnessGoal.GENERAL_FITNESS)
     fitness_level = models.CharField(max_length=16, choices=FitnessLevel.choices, default=FitnessLevel.BEGINNER)
+    is_premium = models.BooleanField(default=False)
+    premium_provider = models.CharField(max_length=32, blank=True, default="")
+    premium_order_id = models.CharField(max_length=100, blank=True, default="")
+    premium_since = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return self.user.username

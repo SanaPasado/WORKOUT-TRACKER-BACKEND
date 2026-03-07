@@ -16,8 +16,10 @@ class UserProfileSerializer(serializers.ModelSerializer):
         model = UserProfile
         fields = [
             "username", "email", "age", "height_cm", "weight_kg",
-            "fitness_goal", "fitness_level"
+            "fitness_goal", "fitness_level", "is_premium", "premium_provider",
+            "premium_order_id", "premium_since"
         ]
+        read_only_fields = ["is_premium", "premium_provider", "premium_order_id", "premium_since"]
 
     #serializers used to pass frontend data to backend
 

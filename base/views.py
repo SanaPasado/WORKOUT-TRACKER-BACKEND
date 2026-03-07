@@ -6,6 +6,7 @@ from smtplib import SMTPException
 from datetime import timedelta
 from pathlib import Path
 
+import requests
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
@@ -28,6 +29,7 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
+from requests.auth import HTTPBasicAuth
 
 from .models import (
     Exercise,
@@ -63,14 +65,66 @@ def is_profile_complete(profile):
 def getRoutes(request):
     routes = [
         "/auth/register/",
+        "/auth/verify-email/",
         "/users/login/",
+        "/users/forgot-password/",
+        "/users/reset-password/",
         "/auth/token/refresh/",
         "/users/profile/",
+        "/premium/status/",
+        "/premium/paypal/create-order/",
+        "/premium/paypal/capture-order/",
         "/exercises/",
         "/chat/send-message/",
         "/programs/generate/",
     ]
     return JsonResponse(routes, safe=False)
+
+
+def _get_paypal_base_url():
+    mode = (settings.PAYPAL_MODE or "sandbox").strip().lower()
+    if mode == "live":
+        return "https://api-m.paypal.com"
+    return "https://api-m.sandbox.paypal.com"
+
+
+def _get_paypal_access_token():
+    if not settings.PAYPAL_CLIENT_ID or not settings.PAYPAL_CLIENT_SECRET:
+        raise ValueError("PayPal credentials are not configured.")
+
+    response = requests.post(
+        f"{_get_paypal_base_url()}/v1/oauth2/token",
+        data={"grant_type": "client_credentials"},
+        headers={"Accept": "application/json", "Accept-Language": "en_US"},
+        auth=HTTPBasicAuth(settings.PAYPAL_CLIENT_ID, settings.PAYPAL_CLIENT_SECRET),
+        timeout=20,
+    )
+
+    if response.status_code >= 400:
+        raise RuntimeError(f"PayPal token request failed: {response.text[:300]}")
+
+    access_token = response.json().get("access_token")
+    if not access_token:
+        raise RuntimeError("PayPal token response missing access_token.")
+    return access_token
+
+
+def _paypal_request(method, path, access_token, payload=None):
+    response = requests.request(
+        method,
+        f"{_get_paypal_base_url()}{path}",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {access_token}",
+        },
+        json=payload,
+        timeout=20,
+    )
+
+    if response.status_code >= 400:
+        raise RuntimeError(f"PayPal API request failed: {response.text[:300]}")
+
+    return response.json()
 
 
 @api_view(["POST"])
@@ -384,6 +438,166 @@ def reset_password(request):
         {"message": "Password has been reset successfully."},
         status=status.HTTP_200_OK,
     )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def premium_status(request):
+    profile, _ = UserProfile.objects.get_or_create(user=request.user)
+    return Response(
+        {
+            "is_premium": profile.is_premium,
+            "premium_provider": profile.premium_provider,
+            "premium_order_id": profile.premium_order_id,
+            "premium_since": profile.premium_since,
+        }
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def paypal_create_order(request):
+    profile, _ = UserProfile.objects.get_or_create(user=request.user)
+
+    if profile.is_premium:
+        return Response(
+            {"detail": "You already have premium access."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        access_token = _get_paypal_access_token()
+        order_payload = {
+            "intent": "CAPTURE",
+            "purchase_units": [
+                {
+                    "description": "ANGRIT Premium Access",
+                    "amount": {
+                        "currency_code": settings.PAYPAL_CURRENCY,
+                        "value": settings.PAYPAL_PREMIUM_PRICE,
+                    },
+                }
+            ],
+            "payment_source": {
+                "paypal": {
+                    "experience_context": {
+                        "payment_method_preference": "IMMEDIATE_PAYMENT_REQUIRED",
+                        "landing_page": "LOGIN",
+                        "user_action": "PAY_NOW",
+                        "return_url": settings.PAYPAL_RETURN_URL,
+                        "cancel_url": settings.PAYPAL_CANCEL_URL,
+                    }
+                }
+            },
+        }
+
+        order_response = _paypal_request(
+            "POST",
+            "/v2/checkout/orders",
+            access_token,
+            payload=order_payload,
+        )
+
+        approval_url = None
+        for link in order_response.get("links", []):
+            if link.get("rel") == "approve":
+                approval_url = link.get("href")
+                break
+
+        if not approval_url:
+            return Response(
+                {"detail": "Unable to create PayPal approval URL."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return Response(
+            {
+                "orderID": order_response.get("id"),
+                "approve_url": approval_url,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+    except ValueError as error:
+        return Response({"detail": str(error)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    except requests.RequestException:
+        logger.exception("Network error while creating PayPal order")
+        return Response(
+            {"detail": "Unable to reach PayPal. Please try again later."},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+    except RuntimeError as error:
+        logger.exception("PayPal order creation failed")
+        return Response({"detail": str(error)}, status=status.HTTP_502_BAD_GATEWAY)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def paypal_capture_order(request):
+    order_id = (request.data.get("orderID") or request.data.get("token") or "").strip()
+    if not order_id:
+        return Response(
+            {"detail": "orderID is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    profile, _ = UserProfile.objects.get_or_create(user=request.user)
+
+    if profile.is_premium and profile.premium_order_id == order_id:
+        return Response(
+            {"message": "Premium already activated.", "is_premium": True},
+            status=status.HTTP_200_OK,
+        )
+
+    try:
+        access_token = _get_paypal_access_token()
+        capture_response = _paypal_request(
+            "POST",
+            f"/v2/checkout/orders/{order_id}/capture",
+            access_token,
+            payload={},
+        )
+
+        order_status = (capture_response.get("status") or "").upper()
+        captures = []
+        for purchase_unit in capture_response.get("purchase_units", []):
+            payments = purchase_unit.get("payments", {})
+            captures.extend(payments.get("captures", []))
+
+        has_completed_capture = any(
+            (capture.get("status") or "").upper() == "COMPLETED"
+            for capture in captures
+        )
+
+        if order_status != "COMPLETED" and not has_completed_capture:
+            return Response(
+                {"detail": "PayPal capture is not completed yet."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        profile.is_premium = True
+        profile.premium_provider = "paypal"
+        profile.premium_order_id = order_id
+        profile.premium_since = timezone.now()
+        profile.save(update_fields=["is_premium", "premium_provider", "premium_order_id", "premium_since"])
+
+        return Response(
+            {
+                "message": "Premium activated successfully.",
+                "is_premium": True,
+            },
+            status=status.HTTP_200_OK,
+        )
+    except ValueError as error:
+        return Response({"detail": str(error)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    except requests.RequestException:
+        logger.exception("Network error while capturing PayPal order")
+        return Response(
+            {"detail": "Unable to reach PayPal. Please try again later."},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+    except RuntimeError as error:
+        logger.exception("PayPal capture failed")
+        return Response({"detail": str(error)}, status=status.HTTP_502_BAD_GATEWAY)
 
 
 @api_view(["GET", "PUT"])
