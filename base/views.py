@@ -88,6 +88,13 @@ def _get_paypal_base_url():
     return "https://api-m.sandbox.paypal.com"
 
 
+def _get_paypal_checkout_base_url():
+    mode = (settings.PAYPAL_MODE or "sandbox").strip().lower()
+    if mode == "live":
+        return "https://www.paypal.com/checkoutnow"
+    return "https://www.sandbox.paypal.com/checkoutnow"
+
+
 def _get_paypal_access_token():
     if not settings.PAYPAL_CLIENT_ID or not settings.PAYPAL_CLIENT_SECRET:
         raise ValueError("PayPal credentials are not configured.")
@@ -500,9 +507,13 @@ def paypal_create_order(request):
 
         approval_url = None
         for link in order_response.get("links", []):
-            if link.get("rel") == "approve":
+            rel = (link.get("rel") or "").strip().lower()
+            if rel in {"approve", "payer-action"}:
                 approval_url = link.get("href")
                 break
+
+        if not approval_url and order_response.get("id"):
+            approval_url = f"{_get_paypal_checkout_base_url()}?token={order_response.get('id')}"
 
         if not approval_url:
             return Response(
