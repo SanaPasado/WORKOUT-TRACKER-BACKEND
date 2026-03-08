@@ -463,7 +463,7 @@ def premium_status(request):
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-def paypal_create_order(request):
+def paypal_create_subscription(request):
     profile, _ = UserProfile.objects.get_or_create(user=request.user)
 
     if profile.is_premium:
@@ -473,47 +473,41 @@ def paypal_create_order(request):
         )
 
     try:
+        if not settings.PAYPAL_PLAN_ID:
+            return Response(
+                {"detail": "PayPal plan ID is not configured."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
         access_token = _get_paypal_access_token()
-        order_payload = {
-            "intent": "CAPTURE",
-            "purchase_units": [
-                {
-                    "description": "ANGRIT Premium Access",
-                    "amount": {
-                        "currency_code": settings.PAYPAL_CURRENCY,
-                        "value": settings.PAYPAL_PREMIUM_PRICE,
-                    },
-                }
-            ],
-            "payment_source": {
-                "paypal": {
-                    "experience_context": {
-                        "payment_method_preference": "IMMEDIATE_PAYMENT_REQUIRED",
-                        "landing_page": "LOGIN",
-                        "user_action": "PAY_NOW",
-                        "return_url": settings.PAYPAL_RETURN_URL,
-                        "cancel_url": settings.PAYPAL_CANCEL_URL,
-                    }
-                }
+        subscription_payload = {
+            "plan_id": settings.PAYPAL_PLAN_ID,
+            "custom_id": str(request.user.id),
+            "application_context": {
+                "brand_name": "ANGRIT",
+                "shipping_preference": "NO_SHIPPING",
+                "user_action": "SUBSCRIBE_NOW",
+                "return_url": settings.PAYPAL_RETURN_URL,
+                "cancel_url": settings.PAYPAL_CANCEL_URL,
             },
         }
 
-        order_response = _paypal_request(
+        subscription_response = _paypal_request(
             "POST",
-            "/v2/checkout/orders",
+            "/v1/billing/subscriptions",
             access_token,
-            payload=order_payload,
+            payload=subscription_payload,
         )
 
         approval_url = None
-        for link in order_response.get("links", []):
+        for link in subscription_response.get("links", []):
             rel = (link.get("rel") or "").strip().lower()
             if rel in {"approve", "payer-action"}:
                 approval_url = link.get("href")
                 break
 
-        if not approval_url and order_response.get("id"):
-            approval_url = f"{_get_paypal_checkout_base_url()}?token={order_response.get('id')}"
+        if not approval_url and subscription_response.get("id"):
+            approval_url = f"{_get_paypal_checkout_base_url()}?token={subscription_response.get('id')}"
 
         if not approval_url:
             return Response(
@@ -523,7 +517,7 @@ def paypal_create_order(request):
 
         return Response(
             {
-                "orderID": order_response.get("id"),
+                "subscriptionID": subscription_response.get("id"),
                 "approve_url": approval_url,
             },
             status=status.HTTP_201_CREATED,
@@ -531,29 +525,34 @@ def paypal_create_order(request):
     except ValueError as error:
         return Response({"detail": str(error)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     except requests.RequestException:
-        logger.exception("Network error while creating PayPal order")
+        logger.exception("Network error while creating PayPal subscription")
         return Response(
             {"detail": "Unable to reach PayPal. Please try again later."},
             status=status.HTTP_502_BAD_GATEWAY,
         )
     except RuntimeError as error:
-        logger.exception("PayPal order creation failed")
+        logger.exception("PayPal subscription creation failed")
         return Response({"detail": str(error)}, status=status.HTTP_502_BAD_GATEWAY)
 
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-def paypal_capture_order(request):
-    order_id = (request.data.get("orderID") or request.data.get("token") or "").strip()
-    if not order_id:
+def paypal_activate_subscription(request):
+    subscription_id = (
+        request.data.get("subscriptionID")
+        or request.data.get("token")
+        or request.data.get("orderID")
+        or ""
+    ).strip()
+    if not subscription_id:
         return Response(
-            {"detail": "orderID is required."},
+            {"detail": "subscriptionID is required."},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
     profile, _ = UserProfile.objects.get_or_create(user=request.user)
 
-    if profile.is_premium and profile.premium_order_id == order_id:
+    if profile.is_premium and profile.premium_order_id == subscription_id:
         return Response(
             {"message": "Premium already activated.", "is_premium": True},
             status=status.HTTP_200_OK,
@@ -561,53 +560,49 @@ def paypal_capture_order(request):
 
     try:
         access_token = _get_paypal_access_token()
-        capture_response = _paypal_request(
-            "POST",
-            f"/v2/checkout/orders/{order_id}/capture",
+        subscription_details = _paypal_request(
+            "GET",
+            f"/v1/billing/subscriptions/{subscription_id}",
             access_token,
-            payload={},
         )
 
-        order_status = (capture_response.get("status") or "").upper()
-        captures = []
-        for purchase_unit in capture_response.get("purchase_units", []):
-            payments = purchase_unit.get("payments", {})
-            captures.extend(payments.get("captures", []))
+        subscription_status = (subscription_details.get("status") or "").upper()
+        if subscription_status not in {"ACTIVE", "APPROVED"}:
+            if subscription_status == "APPROVAL_PENDING":
+                return Response(
+                    {"detail": "Subscription is pending approval. Please complete PayPal approval and retry."},
+                    status=status.HTTP_202_ACCEPTED,
+                )
 
-        has_completed_capture = any(
-            (capture.get("status") or "").upper() == "COMPLETED"
-            for capture in captures
-        )
-
-        if order_status != "COMPLETED" and not has_completed_capture:
             return Response(
-                {"detail": "PayPal capture is not completed yet."},
+                {"detail": f"Subscription status is {subscription_status}."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         profile.is_premium = True
-        profile.premium_provider = "paypal"
-        profile.premium_order_id = order_id
+        profile.premium_provider = "paypal_subscription"
+        profile.premium_order_id = subscription_id
         profile.premium_since = timezone.now()
         profile.save(update_fields=["is_premium", "premium_provider", "premium_order_id", "premium_since"])
 
         return Response(
             {
-                "message": "Premium activated successfully.",
+                "message": "Premium subscription activated successfully.",
                 "is_premium": True,
+                "subscription_status": subscription_status,
             },
             status=status.HTTP_200_OK,
         )
     except ValueError as error:
         return Response({"detail": str(error)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     except requests.RequestException:
-        logger.exception("Network error while capturing PayPal order")
+        logger.exception("Network error while activating PayPal subscription")
         return Response(
             {"detail": "Unable to reach PayPal. Please try again later."},
             status=status.HTTP_502_BAD_GATEWAY,
         )
     except RuntimeError as error:
-        logger.exception("PayPal capture failed")
+        logger.exception("PayPal subscription activation failed")
         return Response({"detail": str(error)}, status=status.HTTP_502_BAD_GATEWAY)
 
 

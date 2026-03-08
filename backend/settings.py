@@ -206,6 +206,7 @@ EMAIL_VERIFICATION_FRONTEND_URL = os.getenv(
 PAYPAL_MODE = os.getenv("PAYPAL_MODE", "sandbox")
 PAYPAL_CLIENT_ID = os.getenv("PAYPAL_CLIENT_ID", "")
 PAYPAL_CLIENT_SECRET = os.getenv("PAYPAL_CLIENT_SECRET", "")
+PAYPAL_PLAN_ID = os.getenv("PAYPAL_PLAN_ID", "")
 PAYPAL_CURRENCY = os.getenv("PAYPAL_CURRENCY", "USD")
 PAYPAL_PREMIUM_PRICE = os.getenv("PAYPAL_PREMIUM_PRICE", "4.99")
 PAYPAL_RETURN_URL = os.getenv("PAYPAL_RETURN_URL", "http://localhost:3000/premium-success")
