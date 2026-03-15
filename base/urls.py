@@ -1,8 +1,12 @@
 from django.urls import path
 from . import views
+from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import (
     TokenRefreshView,
 )
+
+router = DefaultRouter()
+router.register("exercises", views.ExerciseViewSet, basename="exercise")
 
 urlpatterns = [
     path('', views.getRoutes, name="routes"),
@@ -18,8 +22,6 @@ urlpatterns = [
     path('premium/paypal/activate-subscription/', views.paypal_activate_subscription, name='paypal-activate-subscription'),
     path('premium/paypal/create-order/', views.paypal_create_subscription, name='paypal-create-order-legacy'),
     path('premium/paypal/capture-order/', views.paypal_activate_subscription, name='paypal-capture-order-legacy'),
-    path('exercises/', views.exercise_list, name='exercise-list'),
-    path('exercises/<int:pk>/', views.exercise_detail, name='exercise-detail'),
     path('workouts/logs/', views.workout_log_list, name='workout-log-list'),
     path('workouts/logs/<int:pk>/', views.workout_log_detail, name='workout-log-detail'),
     path('workouts/dashboard-stats/', views.dashboard_stats, name='dashboard-stats'),
@@ -28,3 +30,5 @@ urlpatterns = [
     path('chat/send-message/', views.chat_view, name='chat-view'),
     path('programs/generate/', views.generate_training_program, name='program-generate'),
 ]
+
+urlpatterns += router.urls

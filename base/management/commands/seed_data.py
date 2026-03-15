@@ -1,6 +1,27 @@
 from django.core.management.base import BaseCommand
 
-from base.models import Difficulty, Exercise, ExerciseCategory
+from base.models import DifficultyLevel, Exercise, ExerciseCategory
+
+
+class SeedExerciseCategory:
+    CHEST = ExerciseCategory.STRENGTH
+    BACK = ExerciseCategory.STRENGTH
+    SHOULDERS = ExerciseCategory.STRENGTH
+    ARMS = ExerciseCategory.STRENGTH
+    LEGS = ExerciseCategory.STRENGTH
+    CORE = ExerciseCategory.FLEXIBILITY
+    CARDIO = ExerciseCategory.CARDIO
+
+
+class SeedDifficulty:
+    BEGINNER = DifficultyLevel.EASY
+    INTERMEDIATE = DifficultyLevel.MEDIUM
+    ADVANCED = DifficultyLevel.HARD
+
+
+# Keep existing seed dictionary values unchanged while mapping to the new schema.
+ExerciseCategory = SeedExerciseCategory
+Difficulty = SeedDifficulty
 
 
 EXERCISE_SEED_DATA = [
@@ -330,13 +351,16 @@ class Command(BaseCommand):
         updated_count = 0
 
         for item in EXERCISE_SEED_DATA:
+            video_url = item.get("tutorial_url") or "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
             _, created = Exercise.objects.update_or_create(
-                name=item["name"],
+                exercise_name=item["name"],
                 defaults={
+                    "description": "",
                     "category": item["category"],
-                    "difficulty": item["difficulty"],
-                    "muscle_group": item["muscle_group"],
-                    "tutorial_url": item.get("tutorial_url"),
+                    "difficulty_level": item["difficulty"],
+                    "video_url": video_url,
+                    "muscle_groups_targeted": item["muscle_group"],
+                    "equipment_needed": "",
                     "is_premium": item["is_premium"],
                     "is_active": True,
                 },

@@ -22,9 +22,9 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from dotenv import dotenv_values
 from google import genai
-from rest_framework import serializers, status
+from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, BasePermission, IsAuthenticated, SAFE_METHODS
 from rest_framework.response import Response
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -48,6 +48,31 @@ from .serializers import (
 
 
 logger = logging.getLogger(__name__)
+
+
+class IsAdminOrReadOnly(BasePermission):
+    def has_permission(self, request, view):
+        if request.method in SAFE_METHODS:
+            return True
+        return bool(request.user and request.user.is_staff)
+
+
+class ExerciseViewSet(viewsets.ModelViewSet):
+    serializer_class = ExerciseSerializer
+    permission_classes = [IsAdminOrReadOnly]
+
+    def get_queryset(self):
+        queryset = Exercise.objects.all().order_by("exercise_name", "id")
+
+        q = self.request.query_params.get("q")
+        if q:
+            queryset = queryset.filter(exercise_name__icontains=q)
+
+        category = self.request.query_params.get("category")
+        if category:
+            queryset = queryset.filter(category__iexact=category)
+
+        return queryset
 
 
 def is_profile_complete(profile):
@@ -622,13 +647,13 @@ def user_profile(request):
 
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def exercise_list(request):
-    qs = Exercise.objects.filter(is_active=True)
+    qs = Exercise.objects.all()
 
     q = request.query_params.get("q")
     if q:
-        qs = qs.filter(name__icontains=q)
+        qs = qs.filter(exercise_name__icontains=q)
 
     category = request.query_params.get("category")
     if category:
@@ -639,9 +664,9 @@ def exercise_list(request):
 
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def exercise_detail(request, pk):
-    exercise = get_object_or_404(Exercise, pk=pk, is_active=True)
+    exercise = get_object_or_404(Exercise, pk=pk)
     serializer = ExerciseSerializer(exercise, many=False)
     return Response(serializer.data)
 
@@ -952,7 +977,7 @@ def _build_program_context(request):
         .values("name")[:10]
     )
     available_exercises = list(
-        Exercise.objects.filter(is_active=True).order_by("name").values_list("name", flat=True)[:200]
+        Exercise.objects.order_by("exercise_name").values_list("exercise_name", flat=True)[:200]
     )
 
     requirements = request.data.get("requirements")

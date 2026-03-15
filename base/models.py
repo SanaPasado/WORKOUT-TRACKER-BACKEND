@@ -41,34 +41,37 @@ class UserProfile(models.Model):
 
 
 class ExerciseCategory(models.TextChoices):
-    CHEST = "CHEST", "Chest"
-    BACK = "BACK", "Back"
-    SHOULDERS = "SHOULDERS", "Shoulders"
-    ARMS = "ARMS", "Arms"
-    LEGS = "LEGS", "Legs"
-    CORE = "CORE", "Core"
-    CARDIO = "CARDIO", "Cardio"
+    CARDIO = "cardio", "Cardio"
+    STRENGTH = "strength", "Strength"
+    STRETCHING = "stretching", "Stretching"
+    FLEXIBILITY = "flexibility", "Flexibility"
 
-class Difficulty(models.TextChoices):
-    BEGINNER = "BEGINNER", "Beginner"
-    INTERMEDIATE = "INTERMEDIATE", "Intermediate"
-    ADVANCED = "ADVANCED", "Advanced"
+class DifficultyLevel(models.TextChoices):
+    EASY = "easy", "Easy"
+    MEDIUM = "medium", "Medium"
+    HARD = "hard", "Hard"
+
+
+# Backward-compatible alias used by existing imports.
+Difficulty = DifficultyLevel
 
 class Exercise(models.Model):
-    name = models.CharField(max_length=120, unique=True)
+    exercise_name = models.CharField(max_length=120)
+    description = models.TextField(blank=True, default="")
     category = models.CharField(max_length=20, choices=ExerciseCategory.choices)
-    difficulty = models.CharField(max_length=20, choices=Difficulty.choices)
-    muscle_group = models.CharField(max_length=120)
-    tutorial_url = models.URLField(blank=True, null=True)
+    difficulty_level = models.CharField(max_length=10, choices=DifficultyLevel.choices)
+    video_url = models.URLField()
+    muscle_groups_targeted = models.CharField(max_length=255, blank=True)
+    equipment_needed = models.CharField(max_length=255, blank=True, default="")
     is_premium = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)  # optional
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ["name"]
+        ordering = ["exercise_name"]
 
     def __str__(self):
-        return self.name
+        return self.exercise_name
 # This one for exercise list
 
 
