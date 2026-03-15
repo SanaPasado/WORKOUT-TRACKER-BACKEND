@@ -1,6 +1,8 @@
 from rest_framework import serializers
 from .models import (
+    DifficultyLevel,
     Exercise,
+    ExerciseCategory,
     UserProfile,
     WorkoutLog,
     WorkoutSplit,
@@ -23,10 +25,89 @@ class UserProfileSerializer(serializers.ModelSerializer):
 
     #serializers used to pass frontend data to backend
 
-class ExerciseSerializer(serializers.ModelSerializer):
+class ExerciseListSerializer(serializers.ModelSerializer):
+    short_description = serializers.SerializerMethodField()
+
     class Meta:
         model = Exercise
-        fields = ["id", "name", "category", "difficulty", "muscle_group", "tutorial_url", "is_premium"]
+        fields = [
+            "id",
+            "exercise_name",
+            "category",
+            "difficulty_level",
+            "short_description",
+            "video_url",
+        ]
+
+    def get_short_description(self, obj):
+        description = (obj.description or "").strip()
+        if len(description) <= 140:
+            return description
+        return f"{description[:137].rstrip()}..."
+
+
+class ExerciseDetailSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Exercise
+        fields = [
+            "id",
+            "exercise_name",
+            "description",
+            "category",
+            "difficulty_level",
+            "video_url",
+            "muscle_groups_targeted",
+            "equipment_needed",
+            "created_at",
+            "updated_at",
+        ]
+
+
+class ExerciseWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Exercise
+        fields = [
+            "id",
+            "exercise_name",
+            "description",
+            "category",
+            "difficulty_level",
+            "video_url",
+            "muscle_groups_targeted",
+            "equipment_needed",
+        ]
+        read_only_fields = ["id"]
+
+    def validate(self, attrs):
+        cleaned_attrs = attrs.copy()
+
+        for field_name in [
+            "exercise_name",
+            "description",
+            "video_url",
+            "muscle_groups_targeted",
+            "equipment_needed",
+        ]:
+            value = cleaned_attrs.get(field_name)
+            if isinstance(value, str):
+                cleaned_attrs[field_name] = value.strip()
+
+        if not cleaned_attrs.get("exercise_name"):
+            raise serializers.ValidationError({"exercise_name": "This field is required."})
+
+        return cleaned_attrs
+
+    def validate_category(self, value):
+        valid_values = {choice for choice, _ in ExerciseCategory.choices}
+        if value not in valid_values:
+            raise serializers.ValidationError("Invalid category selection.")
+        return value
+
+    def validate_difficulty_level(self, value):
+        valid_values = {choice for choice, _ in DifficultyLevel.choices}
+        if value not in valid_values:
+            raise serializers.ValidationError("Invalid difficulty level selection.")
+        return value
 
 
 class WorkoutLogSerializer(serializers.ModelSerializer):

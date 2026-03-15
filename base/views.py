@@ -20,11 +20,12 @@ from django.utils.encoding import force_bytes
 from django.core.mail import send_mail
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import Q
 from dotenv import dotenv_values
 from google import genai
-from rest_framework import serializers, status
+from rest_framework import generics, permissions, serializers, status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -39,8 +40,11 @@ from .models import (
     WorkoutProgram,
     WorkoutProgramExercise,
 )
+from .permissions import IsPremiumUserOrAdmin
 from .serializers import (
-    ExerciseSerializer,
+    ExerciseDetailSerializer,
+    ExerciseListSerializer,
+    ExerciseWriteSerializer,
     UserProfileSerializer,
     WorkoutLogSerializer,
     WorkoutSplitSerializer,
@@ -75,10 +79,60 @@ def getRoutes(request):
         "/premium/paypal/create-order/",
         "/premium/paypal/capture-order/",
         "/exercises/",
+        "/exercises/{id}/",
         "/chat/send-message/",
         "/programs/generate/",
     ]
     return JsonResponse(routes, safe=False)
+
+
+class ExerciseListCreateView(generics.ListCreateAPIView):
+    queryset = Exercise.objects.all()
+
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsAdminUser()]
+        return [AllowAny()]
+
+    def get_serializer_class(self):
+        if self.request.method == "POST":
+            return ExerciseWriteSerializer
+        return ExerciseListSerializer
+
+    def get_queryset(self):
+        queryset = Exercise.objects.all().order_by("exercise_name", "id")
+
+        search_term = (self.request.query_params.get("q") or "").strip()
+        if search_term:
+            queryset = queryset.filter(
+                Q(exercise_name__icontains=search_term)
+                | Q(description__icontains=search_term)
+                | Q(muscle_groups_targeted__icontains=search_term)
+            )
+
+        category = (self.request.query_params.get("category") or "").strip().lower()
+        if category:
+            queryset = queryset.filter(category=category)
+
+        difficulty_level = (self.request.query_params.get("difficulty_level") or "").strip().lower()
+        if difficulty_level:
+            queryset = queryset.filter(difficulty_level=difficulty_level)
+
+        return queryset
+
+
+class ExerciseRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = Exercise.objects.all()
+
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [IsAuthenticated(), IsPremiumUserOrAdmin()]
+        return [IsAdminUser()]
+
+    def get_serializer_class(self):
+        if self.request.method == "GET":
+            return ExerciseDetailSerializer
+        return ExerciseWriteSerializer
 
 
 def _get_paypal_base_url():
@@ -618,31 +672,6 @@ def user_profile(request):
     serializer = UserProfileSerializer(profile, data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
     serializer.save()
-    return Response(serializer.data)
-
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def exercise_list(request):
-    qs = Exercise.objects.filter(is_active=True)
-
-    q = request.query_params.get("q")
-    if q:
-        qs = qs.filter(name__icontains=q)
-
-    category = request.query_params.get("category")
-    if category:
-        qs = qs.filter(category__iexact=category)
-
-    serializer = ExerciseSerializer(qs, many=True)
-    return Response(serializer.data)
-
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def exercise_detail(request, pk):
-    exercise = get_object_or_404(Exercise, pk=pk, is_active=True)
-    serializer = ExerciseSerializer(exercise, many=False)
     return Response(serializer.data)
 
 

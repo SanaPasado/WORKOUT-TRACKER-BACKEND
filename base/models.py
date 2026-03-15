@@ -4,6 +4,8 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.utils import timezone
 
+from .validators import validate_youtube_url
+
 class FitnessGoal(models.TextChoices):
     BUILD_MUSCLE = "BUILD_MUSCLE", "Build Muscle"
     LOSE_WEIGHT = "LOSE_WEIGHT", "Lose Weight"
@@ -41,35 +43,36 @@ class UserProfile(models.Model):
 
 
 class ExerciseCategory(models.TextChoices):
-    CHEST = "CHEST", "Chest"
-    BACK = "BACK", "Back"
-    SHOULDERS = "SHOULDERS", "Shoulders"
-    ARMS = "ARMS", "Arms"
-    LEGS = "LEGS", "Legs"
-    CORE = "CORE", "Core"
-    CARDIO = "CARDIO", "Cardio"
+    CARDIO = "cardio", "Cardio"
+    STRENGTH = "strength", "Strength"
+    STRETCHING = "stretching", "Stretching"
+    FLEXIBILITY = "flexibility", "Flexibility"
 
-class Difficulty(models.TextChoices):
-    BEGINNER = "BEGINNER", "Beginner"
-    INTERMEDIATE = "INTERMEDIATE", "Intermediate"
-    ADVANCED = "ADVANCED", "Advanced"
+
+class DifficultyLevel(models.TextChoices):
+    EASY = "easy", "Easy"
+    MEDIUM = "medium", "Medium"
+    HARD = "hard", "Hard"
 
 class Exercise(models.Model):
-    name = models.CharField(max_length=120, unique=True)
-    category = models.CharField(max_length=20, choices=ExerciseCategory.choices)
-    difficulty = models.CharField(max_length=20, choices=Difficulty.choices)
-    muscle_group = models.CharField(max_length=120)
-    tutorial_url = models.URLField(blank=True, null=True)
-    is_premium = models.BooleanField(default=False)
-    is_active = models.BooleanField(default=True)  # optional
+    exercise_name = models.CharField(max_length=160, db_index=True)
+    description = models.TextField(blank=True)
+    category = models.CharField(max_length=20, choices=ExerciseCategory.choices, db_index=True)
+    difficulty_level = models.CharField(max_length=10, choices=DifficultyLevel.choices, db_index=True)
+    video_url = models.URLField(validators=[validate_youtube_url])
+    muscle_groups_targeted = models.CharField(max_length=255, blank=True)
+    equipment_needed = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ["name"]
+        ordering = ["exercise_name", "id"]
+        indexes = [
+            models.Index(fields=["category", "difficulty_level"]),
+        ]
 
     def __str__(self):
-        return self.name
-# This one for exercise list
+        return self.exercise_name
 
 
 class WorkoutLog(models.Model):
