@@ -3,7 +3,8 @@ import os
 import json
 import re
 from smtplib import SMTPException
-from datetime import timedelta
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import requests
@@ -920,6 +921,18 @@ def _build_program_name(week_number, day_index, day_payload):
     return f"Week {week_number} - {day_name}: {workout_name}"[:120]
 
 
+def _to_json_safe(value):
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {key: _to_json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_json_safe(item) for item in value]
+    return value
+
+
 def _persist_generated_program(user, split_name, weeks):
     with transaction.atomic():
         split = WorkoutSplit.objects.create(
@@ -975,29 +988,30 @@ def _build_program_context(request):
         .order_by("-date", "-created_at")
         .values("exercise", "sets", "reps", "weight", "date")[:20]
     )
+    
     existing_splits = list(
         WorkoutSplit.objects.filter(user=request.user)
         .order_by("-updated_at")
         .values("name")[:10]
     )
     available_exercises = list(
-        Exercise.objects.filter(is_active=True).order_by("name").values_list("name", flat=True)[:200]
+        Exercise.objects.all().order_by("exercise_name").values_list("exercise_name", flat=True)[:200]
     )
 
     requirements = request.data.get("requirements")
 
-    return {
+    return _to_json_safe({
         "username": request.user.username,
         "fitness_goal": goal,
         "fitness_level": level,
         "age": age,
         "height_cm": height_cm,
-        "weight_kg": float(weight_kg) if weight_kg is not None else None,
+        "weight_kg": weight_kg,
         "available_exercises": available_exercises,
         "recent_workout_logs": recent_logs,
         "existing_split_names": [split["name"] for split in existing_splits],
         "requirements": requirements or "",
-    }
+    })
 
 @api_view(["POST"])
 def chat_view(request):
