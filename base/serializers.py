@@ -1,5 +1,7 @@
 from rest_framework import serializers
 from .models import (
+    ChatConversation,
+    ChatMessage,
     DifficultyLevel,
     Exercise,
     ExerciseCategory,
@@ -18,10 +20,16 @@ class UserProfileSerializer(serializers.ModelSerializer):
         model = UserProfile
         fields = [
             "username", "email", "age", "height_cm", "weight_kg",
-            "fitness_goal", "fitness_level", "is_premium", "premium_provider",
+            "fitness_goal", "fitness_level", "is_premium", "free_chat_messages_used", "premium_provider",
             "premium_order_id", "premium_since"
         ]
-        read_only_fields = ["is_premium", "premium_provider", "premium_order_id", "premium_since"]
+        read_only_fields = [
+            "is_premium",
+            "free_chat_messages_used",
+            "premium_provider",
+            "premium_order_id",
+            "premium_since",
+        ]
 
     #serializers used to pass frontend data to backend
 
@@ -204,3 +212,15 @@ class WorkoutSplitSerializer(serializers.ModelSerializer):
                     )
 
         return instance
+
+
+class ChatMessageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChatMessage
+        fields = ["id", "role", "content", "created_at"]
+
+
+class ChatConversationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChatConversation
+        fields = ["id", "title", "created_at", "updated_at"]

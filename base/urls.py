@@ -25,6 +25,7 @@ urlpatterns = [
     path('workouts/dashboard-stats/', views.dashboard_stats, name='dashboard-stats'),
     path('splits/', views.workout_split_list, name='workout-split-list'),
     path('splits/<int:pk>/', views.workout_split_detail, name='workout-split-detail'),
+    path('chat/history/', views.chat_history, name='chat-history'),
     path('chat/send-message/', views.chat_view, name='chat-view'),
     path('programs/generate/', views.generate_training_program, name='program-generate'),
 ]

@@ -34,6 +34,8 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from requests.auth import HTTPBasicAuth
 
 from .models import (
+    ChatConversation,
+    ChatMessage,
     Exercise,
     UserProfile,
     WorkoutLog,
@@ -43,6 +45,8 @@ from .models import (
 )
 from .permissions import IsPremiumUserOrAdmin
 from .serializers import (
+    ChatConversationSerializer,
+    ChatMessageSerializer,
     ExerciseDetailSerializer,
     ExerciseListSerializer,
     ExerciseWriteSerializer,
@@ -53,6 +57,10 @@ from .serializers import (
 
 
 logger = logging.getLogger(__name__)
+
+FREE_CHAT_MESSAGE_LIMIT = 5
+CHAT_HISTORY_CONTEXT_LIMIT = 20
+CHAT_HISTORY_RESPONSE_LIMIT = 200
 
 
 def is_profile_complete(profile):
@@ -81,6 +89,7 @@ def getRoutes(request):
         "/premium/paypal/capture-order/",
         "/exercises/",
         "/exercises/{id}/",
+        "/chat/history/",
         "/chat/send-message/",
         "/programs/generate/",
     ]
@@ -381,8 +390,14 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         for k, v in serializer.items():
             data[k] = v
 
-        profile = getattr(self.user, "profile", None)
+        profile, _ = UserProfile.objects.get_or_create(user=self.user)
         data["needs_profile"] = not is_profile_complete(profile)
+        data["is_premium"] = profile.is_premium
+        data["remaining_free_messages"] = (
+            None
+            if profile.is_premium
+            else max(0, FREE_CHAT_MESSAGE_LIMIT - int(profile.free_chat_messages_used or 0))
+        )
         return data
 
 
@@ -1013,12 +1028,105 @@ def _build_program_context(request):
         "requirements": requirements or "",
     })
 
+
+def _parse_conversation_id(raw_value):
+    if raw_value is None or raw_value == "":
+        return None
+    if isinstance(raw_value, int):
+        return raw_value
+
+    value = str(raw_value).strip()
+    if not value:
+        return None
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise serializers.ValidationError({"detail": "conversation_id must be an integer."})
+
+
+def _remaining_free_messages(profile):
+    if profile.is_premium:
+        return None
+    return max(0, FREE_CHAT_MESSAGE_LIMIT - int(profile.free_chat_messages_used or 0))
+
+
+def _build_chat_prompt(previous_messages, user_message):
+    prompt_lines = [SYSTEM_PROMPT.strip(), "", "Conversation history:"]
+    if previous_messages:
+        for message in previous_messages:
+            speaker = "User" if message.role == ChatMessage.ROLE_USER else "Coach"
+            prompt_lines.append(f"{speaker}: {message.content}")
+    else:
+        prompt_lines.append("(no previous messages)")
+
+    prompt_lines.extend(["", f"User: {user_message}", "Coach:"])
+    return "\n".join(prompt_lines)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def chat_history(request):
+    conversation_id = _parse_conversation_id(request.query_params.get("conversation_id"))
+    profile, _ = UserProfile.objects.get_or_create(user=request.user)
+
+    conversations_qs = ChatConversation.objects.filter(user=request.user)
+    active_conversation = None
+    if conversation_id is not None:
+        active_conversation = get_object_or_404(conversations_qs, pk=conversation_id)
+    else:
+        active_conversation = conversations_qs.first()
+
+    messages = []
+    if active_conversation:
+        recent_messages = list(
+            active_conversation.messages.order_by("-created_at", "-id")[:CHAT_HISTORY_RESPONSE_LIMIT]
+        )
+        messages = list(reversed(recent_messages))
+
+    return Response(
+        {
+            "is_premium": profile.is_premium,
+            "remaining_free_messages": _remaining_free_messages(profile),
+            "conversations": ChatConversationSerializer(conversations_qs[:20], many=True).data,
+            "active_conversation": (
+                ChatConversationSerializer(active_conversation).data if active_conversation else None
+            ),
+            "messages": ChatMessageSerializer(messages, many=True).data,
+        },
+        status=status.HTTP_200_OK,
+    )
+
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def chat_view(request):
-  
     user_message = (request.data.get("message") or "").strip()
     if not user_message:
         return Response({"error": "Message cannot be empty."}, status=status.HTTP_400_BAD_REQUEST)
+
+    conversation_id = _parse_conversation_id(request.data.get("conversation_id"))
+    profile, _ = UserProfile.objects.get_or_create(user=request.user)
+    if not profile.is_premium and _remaining_free_messages(profile) <= 0:
+        return Response(
+            {
+                "error": "Free chat limit reached. Upgrade to premium for unlimited messages.",
+                "is_premium": False,
+                "remaining_free_messages": 0,
+            },
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    conversation = None
+    previous_messages = []
+    if conversation_id is not None:
+        conversation = get_object_or_404(ChatConversation, pk=conversation_id, user=request.user)
+        previous_messages = list(
+            reversed(
+                list(
+                    conversation.messages.order_by("-created_at", "-id")[:CHAT_HISTORY_CONTEXT_LIMIT]
+                )
+            )
+        )
 
     api_key, model_name, key_source, model_source, masked_key = _resolve_gemini_credentials()
     print(f"[chat_view] Gemini key source={key_source}, key={masked_key}, model source={model_source}, model={model_name}")
@@ -1033,7 +1141,7 @@ def chat_view(request):
     # 4) Call Gemini
     try:
         client = genai.Client(api_key=api_key)
-        prompt = f"{SYSTEM_PROMPT}\n\nUser: {user_message}"
+        prompt = _build_chat_prompt(previous_messages, user_message)
 
         result = client.models.generate_content(
             model=model_name,
@@ -1044,7 +1152,50 @@ def chat_view(request):
         if not reply_text:
             return Response({"error": "Model returned an empty response."}, status=status.HTTP_502_BAD_GATEWAY)
 
-        return Response({"reply": reply_text}, status=status.HTTP_200_OK)
+        with transaction.atomic():
+            profile = UserProfile.objects.select_for_update().get(pk=profile.pk)
+            if not profile.is_premium and _remaining_free_messages(profile) <= 0:
+                return Response(
+                    {
+                        "error": "Free chat limit reached. Upgrade to premium for unlimited messages.",
+                        "is_premium": False,
+                        "remaining_free_messages": 0,
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            if conversation is None:
+                conversation = ChatConversation.objects.create(
+                    user=request.user,
+                    title=user_message[:120] or "New chat",
+                )
+
+            ChatMessage.objects.create(
+                conversation=conversation,
+                role=ChatMessage.ROLE_USER,
+                content=user_message,
+            )
+            ChatMessage.objects.create(
+                conversation=conversation,
+                role=ChatMessage.ROLE_ASSISTANT,
+                content=reply_text,
+            )
+
+            if not profile.is_premium:
+                profile.free_chat_messages_used += 1
+                profile.save(update_fields=["free_chat_messages_used"])
+
+            conversation.save(update_fields=["updated_at"])
+
+            return Response(
+                {
+                    "reply": reply_text,
+                    "conversation_id": conversation.id,
+                    "is_premium": profile.is_premium,
+                    "remaining_free_messages": _remaining_free_messages(profile),
+                },
+                status=status.HTTP_200_OK,
+            )
 
     except Exception as e:
         logger.exception("Gemini request failed")

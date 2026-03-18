@@ -28,6 +28,7 @@ class UserProfile(models.Model):
     fitness_goal = models.CharField(max_length=32, choices=FitnessGoal.choices, default=FitnessGoal.GENERAL_FITNESS)
     fitness_level = models.CharField(max_length=16, choices=FitnessLevel.choices, default=FitnessLevel.BEGINNER)
     is_premium = models.BooleanField(default=False)
+    free_chat_messages_used = models.PositiveIntegerField(default=0)
     premium_provider = models.CharField(max_length=32, blank=True, default="")
     premium_order_id = models.CharField(max_length=100, blank=True, default="")
     premium_since = models.DateTimeField(null=True, blank=True)
@@ -126,6 +127,39 @@ class WorkoutProgramExercise(models.Model):
 
     def __str__(self):
         return self.exercise_name
+
+
+class ChatConversation(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="chat_conversations")
+    title = models.CharField(max_length=120, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at", "-created_at", "-id"]
+
+    def __str__(self):
+        return f"{self.user.username} chat {self.id}"
+
+
+class ChatMessage(models.Model):
+    ROLE_USER = "user"
+    ROLE_ASSISTANT = "assistant"
+    ROLE_CHOICES = [
+        (ROLE_USER, "User"),
+        (ROLE_ASSISTANT, "Assistant"),
+    ]
+
+    conversation = models.ForeignKey(ChatConversation, on_delete=models.CASCADE, related_name="messages")
+    role = models.CharField(max_length=16, choices=ROLE_CHOICES)
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+    def __str__(self):
+        return f"{self.role} message {self.id}"
 
 
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
