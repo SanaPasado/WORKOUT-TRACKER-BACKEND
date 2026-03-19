@@ -29,6 +29,7 @@ class UserProfile(models.Model):
     fitness_level = models.CharField(max_length=16, choices=FitnessLevel.choices, default=FitnessLevel.BEGINNER)
     is_premium = models.BooleanField(default=False)
     free_chat_messages_used = models.PositiveIntegerField(default=0)
+    free_chat_usage_date = models.DateField(null=True, blank=True)
     premium_provider = models.CharField(max_length=32, blank=True, default="")
     premium_order_id = models.CharField(max_length=100, blank=True, default="")
     premium_since = models.DateTimeField(null=True, blank=True)

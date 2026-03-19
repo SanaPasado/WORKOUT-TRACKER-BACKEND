@@ -1,7 +1,9 @@
 from unittest.mock import Mock, patch
+from datetime import timedelta
 
 from django.contrib.auth.models import User
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -184,6 +186,28 @@ class ChatApiTests(APITestCase):
 
 		profile = UserProfile.objects.get(user=self.premium_user)
 		self.assertEqual(profile.free_chat_messages_used, 0)
+
+	@patch("base.views.genai.Client")
+	def test_free_user_limit_resets_next_day(self, client_mock):
+		self._configure_gemini_mock(client_mock)
+		self.client.force_authenticate(user=self.free_user)
+
+		profile = UserProfile.objects.get(user=self.free_user)
+		profile.free_chat_messages_used = 5
+		profile.free_chat_usage_date = timezone.localdate() - timedelta(days=1)
+		profile.save(update_fields=["free_chat_messages_used", "free_chat_usage_date"])
+
+		response = self.client.post(
+			self.chat_url,
+			{"message": "new day message"},
+			format="json",
+		)
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertEqual(response.data["remaining_free_messages"], 4)
+
+		profile.refresh_from_db()
+		self.assertEqual(profile.free_chat_usage_date, timezone.localdate())
+		self.assertEqual(profile.free_chat_messages_used, 1)
 
 	def test_login_response_includes_premium_flags(self):
 		response = self.client.post(

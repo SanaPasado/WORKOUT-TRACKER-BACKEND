@@ -393,11 +393,7 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         profile, _ = UserProfile.objects.get_or_create(user=self.user)
         data["needs_profile"] = not is_profile_complete(profile)
         data["is_premium"] = profile.is_premium
-        data["remaining_free_messages"] = (
-            None
-            if profile.is_premium
-            else max(0, FREE_CHAT_MESSAGE_LIMIT - int(profile.free_chat_messages_used or 0))
-        )
+        data["remaining_free_messages"] = _remaining_free_messages(profile)
         return data
 
 
@@ -1048,7 +1044,27 @@ def _parse_conversation_id(raw_value):
 def _remaining_free_messages(profile):
     if profile.is_premium:
         return None
-    return max(0, FREE_CHAT_MESSAGE_LIMIT - int(profile.free_chat_messages_used or 0))
+
+    today = timezone.localdate()
+    if profile.free_chat_usage_date != today:
+        used_messages = 0
+    else:
+        used_messages = int(profile.free_chat_messages_used or 0)
+
+    return max(0, FREE_CHAT_MESSAGE_LIMIT - used_messages)
+
+
+def _reset_daily_free_quota_if_needed(profile):
+    if profile.is_premium:
+        return False
+
+    today = timezone.localdate()
+    if profile.free_chat_usage_date == today:
+        return False
+
+    profile.free_chat_usage_date = today
+    profile.free_chat_messages_used = 0
+    return True
 
 
 def _build_chat_prompt(previous_messages, user_message):
@@ -1154,6 +1170,8 @@ def chat_view(request):
 
         with transaction.atomic():
             profile = UserProfile.objects.select_for_update().get(pk=profile.pk)
+            _reset_daily_free_quota_if_needed(profile)
+
             if not profile.is_premium and _remaining_free_messages(profile) <= 0:
                 return Response(
                     {
@@ -1183,7 +1201,9 @@ def chat_view(request):
 
             if not profile.is_premium:
                 profile.free_chat_messages_used += 1
-                profile.save(update_fields=["free_chat_messages_used"])
+                if not profile.free_chat_usage_date:
+                    profile.free_chat_usage_date = timezone.localdate()
+                profile.save(update_fields=["free_chat_messages_used", "free_chat_usage_date"])
 
             conversation.save(update_fields=["updated_at"])
 
