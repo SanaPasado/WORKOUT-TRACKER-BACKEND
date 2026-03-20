@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 from pathlib import Path
 import os
+from urllib.parse import urlparse, unquote
 
 from dotenv import load_dotenv
 from django.conf import settings
@@ -111,14 +112,32 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
+database_url = os.getenv("DATABASE_URL", "").strip()
+
+if database_url:
+    parsed_db_url = urlparse(database_url)
+    db_engine = "django.db.backends.postgresql"
+    db_host = parsed_db_url.hostname or os.getenv("DB_HOST", "127.0.0.1")
+    db_port = str(parsed_db_url.port or os.getenv("DB_PORT", "5432"))
+    db_name = (parsed_db_url.path or "").lstrip("/") or os.getenv("DB_NAME", "postgres")
+    db_user = unquote(parsed_db_url.username or os.getenv("DB_USER", "workout_user"))
+    db_password = unquote(parsed_db_url.password or os.getenv("DB_PASSWORD", ""))
+else:
+    db_engine = os.getenv("DB_ENGINE", "django.db.backends.postgresql")
+    db_name = os.getenv("DB_NAME", "postgres")
+    db_user = os.getenv("DB_USER", "workout_user")
+    db_password = os.getenv("DB_PASSWORD", "")
+    db_host = os.getenv("DB_HOST", "127.0.0.1")
+    db_port = os.getenv("DB_PORT", "5432")
+
 DATABASES = {
     "default": {
-        "ENGINE": os.getenv("DB_ENGINE", "django.db.backends.postgresql"),
-        "NAME": os.getenv("DB_NAME", "postgres"),
-        "USER": os.getenv("DB_USER", "workout_user"),
-        "PASSWORD": os.getenv("DB_PASSWORD", ""),
-        "HOST": os.getenv("DB_HOST", "127.0.0.1"),
-        "PORT": os.getenv("DB_PORT", "5432"),
+        "ENGINE": db_engine,
+        "NAME": db_name,
+        "USER": db_user,
+        "PASSWORD": db_password,
+        "HOST": db_host,
+        "PORT": db_port,
         "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "60")),
         "OPTIONS": {
             "sslmode": os.getenv("DB_SSLMODE", "prefer"),
