@@ -19,8 +19,8 @@ from django.conf import settings
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-load_dotenv(BASE_DIR / ".env", override=True)
-load_dotenv(BASE_DIR / "base" / ".env", override=True)
+load_dotenv(BASE_DIR / ".env", override=False)
+load_dotenv(BASE_DIR / "base" / ".env", override=False)
 
 
 def env_bool(name, default=False):
