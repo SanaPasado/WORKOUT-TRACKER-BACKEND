@@ -140,6 +140,7 @@ DATABASES = {
         "PORT": db_port,
         "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "60")),
         "OPTIONS": {
+            "connect_timeout": int(os.getenv("DB_CONNECT_TIMEOUT", "10")),
             "sslmode": os.getenv("DB_SSLMODE", "prefer"),
         },
     }
