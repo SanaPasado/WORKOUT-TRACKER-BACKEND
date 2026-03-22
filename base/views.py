@@ -798,14 +798,14 @@ Rules:
 """
 
 PROGRAM_JSON_PROMPT = """
-You are Angrit AI Coach. Generate a personalized 12-week workout program in STRICT JSON only.
+You are Angrit AI Coach. Generate a personalized 4-week workout program in STRICT JSON only.
 
 Output rules:
 - Return one JSON object with these top-level keys only:
     - "split_name": short string
-    - "weeks": array with exactly 12 items (weeks 1..12)
+    - "weeks": array with exactly 4 items (weeks 1..4)
 - Each week object must contain:
-    - "week": integer (1 to 12)
+    - "week": integer (1 to 4)
     - "focus": short string
     - "days": array of 4 to 6 day objects
 - Each day object must contain:
@@ -917,8 +917,8 @@ def _extract_program_payload(text):
 
     if not isinstance(weeks, list):
         raise ValueError("Model response missing 'weeks' array.")
-    if len(weeks) != 12:
-        raise ValueError("Model response must contain exactly 12 weeks.")
+    if len(weeks) != 4:
+        raise ValueError("Model response must contain exactly 4 weeks.")
 
     return {
         "split_name": split_name or "AI Generated Split",
