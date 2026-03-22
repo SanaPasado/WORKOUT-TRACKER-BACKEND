@@ -1,3 +1,8 @@
+# Generation API endpoint for program creation
+GENERATION_API_URL = os.getenv(
+    "GENERATION_API_URL",
+    "https://workout-tracker-backend-38qi.onrender.com/api/programs/generate/"
+)
 """
 Django settings for backend project.
 
@@ -80,8 +85,12 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-CORS_ALLOW_ALL_ORIGINS = env_bool("CORS_ALLOW_ALL_ORIGINS", True)
-CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", "")
+## CORS settings: allow only frontend and localhost
+CORS_ALLOW_ALL_ORIGINS = env_bool("CORS_ALLOW_ALL_ORIGINS", False)
+CORS_ALLOWED_ORIGINS = env_list(
+    "CORS_ALLOWED_ORIGINS",
+    "https://tracker2-iota.vercel.app,http://localhost:3000"
+)
 CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", "")
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
