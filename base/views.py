@@ -20,7 +20,7 @@ from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.utils.encoding import force_bytes
 from django.core.mail import send_mail
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import Q
 from dotenv import dotenv_values
 from google import genai
@@ -72,6 +72,17 @@ def is_profile_complete(profile):
         profile.weight_kg,
     ]
     return all(value is not None for value in required_fields)
+
+
+@api_view(["GET"])
+def health_check(request):
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+        return JsonResponse({"status": "ok", "database": "ok"})
+    except Exception as exc:
+        logger.error("Health check database connection failed: %s", exc)
+        return JsonResponse({"status": "error", "database": "unreachable"}, status=503)
 
 
 @api_view(["GET"])
